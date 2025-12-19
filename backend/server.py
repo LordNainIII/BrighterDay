@@ -18,14 +18,10 @@ app.add_middleware(
 )
 
 # -------------------- Models --------------------
-# Use "small" for much better accuracy than "base"
-# If it's too slow, drop to "base"
 whisper_model = whisper.load_model("small")
 
 openai_client = OpenAI()
 
-# In-memory session store (prototype-safe)
-# session_id -> { "transcript": str, "summary": str }
 SESSIONS = {}
 
 
@@ -80,7 +76,7 @@ async def transcribe(file: UploadFile = File(...)):
 
         result = whisper_model.transcribe(
             wav_path,
-            language="en",       # prevents multilingual hallucinations
+            language="en",
             task="transcribe",
             fp16=False,
         )
