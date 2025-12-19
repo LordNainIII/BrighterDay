@@ -27,7 +27,9 @@ dist-ssr
 __pycache__/
 *.pyc
 .venv/
+venv/
 .env
+backend/.venv/
 
 # Audio uploads
 *.mp3
@@ -39,4 +41,6 @@ __pycache__/
 
 # OS
 Thumbs.db
+
+
 
