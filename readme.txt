@@ -142,8 +142,6 @@ Safeguards include:
 - No automated decision-making
 - No cloud storage of sensitive data
 
-The project is suitable for demonstration and evaluation in an academic setting.
-
 
 ========================
 FAST-INSTRUCTIONS:

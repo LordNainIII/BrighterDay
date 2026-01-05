@@ -17,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------- Models --------------------
+# -------------------- Model --------------------
 whisper_model = whisper.load_model("small")
 
 openai_client = OpenAI()
