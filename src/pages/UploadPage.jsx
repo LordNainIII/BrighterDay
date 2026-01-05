@@ -2,23 +2,27 @@ import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BrighterDay from "../assets/BrighterDay.png";
 
+// FILE TYPE AND UI MISC (BUTTONS ETC)
 export default function UploadPage() {
   const fileInputRef = useRef(null);
   const [fileName, setFileName] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  // TAKES THE FIRST FILE THE USER SELECTS IF MULTIPLE
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) setFileName(file.name);
   };
 
+  // POST FILE TO BACKEND IF CONDITIONS ARE MET
   const handleSubmit = async () => {
     const file = fileInputRef.current?.files?.[0];
     if (!file) return alert("Please upload an MP3 first.");
 
     setLoading(true);
 
+    // CAN WE WORK WITH THIS FILE
     try {
       const form = new FormData();
       form.append("file", file);
@@ -31,7 +35,7 @@ export default function UploadPage() {
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
 
-      // ✅ move to UI #2 using session id (no transcript in frontend state)
+      // MOVE TO UI THAT HANDLES SUBMISSION UPLOAD
       navigate(`/chat?session=${encodeURIComponent(data.session_id)}`);
     } catch (e) {
       console.error(e);
@@ -73,7 +77,6 @@ export default function UploadPage() {
           </button>
         </div>
 
-        {/* Disclaimer beneath the card */}
         <p style={styles.disclaimer}>
           <strong>Please note:</strong> Longer audio files will take longer to
           transcribe.

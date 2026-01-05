@@ -1,15 +1,16 @@
-// src/ChatPage.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export default function ChatPage() {
   const navigate = useNavigate();
 
+  // GRAB THE USER'S SESSION ID FROM URL
   const sessionId = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get("session") || "";
   }, []);
 
+  // ESSENTIAL STATES FOR MAKING SURE IT DOESN'T RELOAD THE SESSION CONSTANTLY. EFFECTIVELT THIS IS STATIC
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [summary, setSummary] = useState("");
 
@@ -17,9 +18,10 @@ export default function ChatPage() {
   const [transcript, setTranscript] = useState("");
   const [transcriptLoaded, setTranscriptLoaded] = useState(false);
 
-  // Prevent duplicate summary fetch in React 18 StrictMode (dev)
+  // PREVENT DUPLICATE SUMMARY FETCH
   const fetchedSummaryRef = useRef(false);
 
+  // HANDLE THE ERROR IF NO SESSION ID EXISTS
   useEffect(() => {
     if (!sessionId) {
       setSummary("No session ID found. Please upload an audio file first.");
@@ -30,6 +32,7 @@ export default function ChatPage() {
     if (fetchedSummaryRef.current) return;
     fetchedSummaryRef.current = true;
 
+    // START LOADING THE TRANSCRIPT SUMMARY
     (async () => {
       try {
         setLoadingSummary(true);
@@ -37,6 +40,7 @@ export default function ChatPage() {
           `http://127.0.0.1:8000/session/summary?session_id=${encodeURIComponent(sessionId)}`
         );
 
+        // IN CASE MY OPEN AI API TOKEN BUDGET RUNS DRY
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.detail || "Failed to load AI summary.");
@@ -52,7 +56,7 @@ export default function ChatPage() {
     })();
   }, [sessionId]);
 
-  // Lazy-load transcript only when user expands the details panel
+  // LAZY LOAD THE TRASNCRIPT WHEN THE USER WANTS TO SEE IT + PREVENTS NEEDLESS REGENERATION
   const loadTranscript = async () => {
     if (!sessionId || transcriptLoaded || loadingTranscript) return;
 
