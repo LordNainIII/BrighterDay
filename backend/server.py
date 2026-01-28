@@ -17,11 +17,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------- Model --------------------
+# -------------------- Models / Clients --------------------
 whisper_model = whisper.load_model("small")
-
 openai_client = OpenAI()
 
+MERCK_VECTOR_STORE_ID = os.getenv("OPENAI_VECTOR_STORE_ID")
+if not MERCK_VECTOR_STORE_ID:
+    raise RuntimeError("Missing env var OPENAI_VECTOR_STORE_ID")
+
+# SESSIONS
 SESSIONS = {}
 
 
@@ -57,11 +61,71 @@ def convert_to_wav_16k_mono(input_path: str) -> str:
     return output_path
 
 
+def generate_summary(transcript: str) -> str:
+    """
+    Uses the Responses API + File Search tool against your Merck vector store.
+    """
+    system_prompt = (
+        "You are assisting a qualified therapist who is reviewing a transcript of a therapy session for "
+        "reflection and formulation rather than diagnosis. Write in clear, professional prose only. "
+        "Do not use headings, bullet points, numbering, markdown, emojis, or stylistic formatting of any kind. "
+        "Do not label sections.\n\n"
+
+        "Provide a concise, coherent narrative account of what appears to be occurring in the session, "
+        "focusing on the client’s expressed concerns, emotional themes, patterns of thinking, behavioural responses, "
+        "interpersonal dynamics, and any shifts or developments across the conversation. Emphasise the therapeutic "
+        "process and meaning-making rather than simply restating content.\n\n"
+
+        "Where relevant, identify psychological processes or patterns that may merit further clinical exploration, "
+        "such as low mood, anxiety-related processes, withdrawal, self-criticism, rumination, avoidance, or difficulties "
+        "in relationships. Frame these as tentative observations or hypotheses rather than conclusions. Do not diagnose "
+        "or imply diagnostic certainty.\n\n"
+
+        "Use the Merck Manuals available via file search only to provide brief, factual clinical context for observed "
+        "patterns, such as general symptom descriptions, common features of psychological states, or recognised risk or "
+        "maintaining factors. Do not use the Merck Manuals to justify or infer a specific disorder.\n\n"
+
+        "You must perform file search and include exactly one short supporting excerpt from the Merck Manuals "
+        "(maximum 20 words). Integrate this excerpt naturally into the narrative as contextual information. "
+        "If no relevant Merck reference can be found, state explicitly: 'No relevant Merck reference found.' "
+        "Do not include more than one excerpt.\n\n"
+
+        "Offer thoughtful, neutral suggestions for areas the therapist may wish to explore in future sessions, "
+        "framed as open, exploratory considerations rather than directives or treatment plans.\n\n"
+
+        "If the transcript appears fragmented, unclear, or potentially inaccurate, briefly note how this may "
+        "limit interpretation. Otherwise, do not comment on transcription quality."
+    )
+
+
+    try:
+        response = openai_client.responses.create(
+            model="gpt-4o-mini",
+            tools=[
+                {
+                    "type": "file_search",
+                    "vector_store_ids": [MERCK_VECTOR_STORE_ID],
+                }
+            ],
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript},
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI request failed: {str(e)}")
+
+    summary = (response.output_text or "").strip()
+    if not summary:
+        raise HTTPException(status_code=500, detail="OpenAI returned an empty summary.")
+    return summary
+
+
 # -------------------- Routes --------------------
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     """
-    Upload MP3 → normalize audio → Whisper transcription → return session_id
+    Upload MP3 → normalise audio → Whisper transcription → return session_id
     """
     session_id = uuid.uuid4().hex
 
@@ -109,54 +173,21 @@ async def transcribe(file: UploadFile = File(...)):
 async def session_summary(session_id: str):
     """
     Generate ONE AI summary per session (cached).
+    Uses Responses API + File Search against your Merck vector store.
     """
     session = SESSIONS.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Prevent multiple summaries
+    # PREVENT MULTIPLE SUMMARIES
     if session.get("summary"):
         return {"summary": session["summary"]}
 
-    transcript = session.get("transcript", "").strip()
+    transcript = (session.get("transcript") or "").strip()
     if not transcript:
         raise HTTPException(status_code=400, detail="Transcript missing")
 
-    response = openai_client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {
-                "role": "system",
-                "content": (
-                    "You are assisting a qualified therapist who is reviewing a transcript of a therapy session. "
-                    "Write in plain professional prose only. Do not use headings, bullet points, numbering, asterisks, "
-                    "markdown, emojis, or stylistic formatting of any kind. Do not label sections.\n\n"
-
-                    "Provide a clear, concise narrative summary of what appears to be happening in the session, "
-                    "including the client's main concerns, emotional themes, cognitive patterns, interpersonal dynamics, "
-                    "and any notable changes across the conversation. Reflect the therapeutic process rather than simply "
-                    "repeating content.\n\n"
-                    
-                    "Where appropriate, gently note potential psychological signs or patterns that may warrant further "
-                    "clinical exploration, such as mood disturbance, anxiety processes, self-criticism, rumination, "
-                    "avoidance, relational difficulties, or coping strategies. Do not diagnose or suggest specific "
-                    "disorders.\n\n"
-
-                    "Include thoughtful follow-up questions or areas the therapist may wish to explore in future sessions, "
-                    "phrased in a neutral, exploratory manner.\n\n"
-
-                    "If the transcript quality is poor, fragmented, or appears inaccurate, briefly acknowledge this and "
-                    "explain how it may limit interpretation. Otherwise, do not mention transcription quality."
-                ),
-            },
-            {
-                "role": "user",
-                "content": transcript,
-            },
-        ],
-    )
-
-    summary = (response.output_text or "").strip()
+    summary = generate_summary(transcript)
     session["summary"] = summary
 
     return {"summary": summary}
