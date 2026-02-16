@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import BrighterDay from "../assets/BrighterDay.png";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "../firebase";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -15,7 +16,6 @@ export default function LoginPage() {
     if (!email.trim()) return "Please enter your email address.";
     if (!/^\S+@\S+\.\S+$/.test(email)) return "Please enter a valid email address.";
     if (!password) return "Please enter your password.";
-    if (password.length < 8) return "Password must be at least 8 characters long.";
     return "";
   };
 
@@ -30,12 +30,20 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // TODO: replace with the actual backend endpoint.
-      await new Promise((r) => setTimeout(r, 700));
-      // IF FOUND:
+      await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
       navigate("/clientlist");
-    } catch {
-      setError("Login failed. Please check your details and try again.");
+    } catch (e) {
+      const code = e?.code || "";
+
+      if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
+        setError("Incorrect email or password.");
+      } else if (code === "auth/user-not-found") {
+        setError("No account found for that email.");
+      } else if (code === "auth/too-many-requests") {
+        setError("Too many attempts. Please wait a moment and try again.");
+      } else {
+        setError("Login failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -44,11 +52,9 @@ export default function LoginPage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
-        <img src={BrighterDay} alt="Brighter Day" style={styles.logo} />
-
         <div style={styles.card}>
           <h1 style={styles.title}>Welcome back</h1>
-          <p style={styles.subtitle}>Sign in to continue to Brighter Day.</p>
+          <p style={styles.subtitle}>Sign in to continue.</p>
 
           {error ? <div style={styles.errorBox}>{error}</div> : null}
 
@@ -92,22 +98,22 @@ export default function LoginPage() {
             {loading ? "Signing in…" : "Sign in"}
           </button>
 
-          <div style={styles.row}>
+          <p style={styles.smallText}>
+            Don’t have an account?{" "}
             <button
               type="button"
               style={styles.linkButton}
               onClick={() => navigate("/register")}
               disabled={loading}
             >
-              Create account
+              Create one
             </button>
-          </div>
+          </p>
         </div>
 
         <p style={styles.disclaimer}>
-          Brighter Day is a support tool and does not replace professional care.
-          Do not use this service for emergencies. By signing in, you agree to
-          Brighter Day’s Terms and Privacy Policy.
+          Brighter Day is a support tool and does not replace professional care. Do not use
+          this service for emergencies.
         </p>
       </div>
     </div>
@@ -129,9 +135,6 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
   },
-  logo: {
-    width: "160px",
-  },
   card: {
     width: "360px",
     padding: "32px",
@@ -148,12 +151,10 @@ const styles = {
   },
   subtitle: {
     marginTop: "6px",
-    marginBottom: "18px",
+    marginBottom: "20px",
     fontSize: "14px",
     color: "#6b7280",
-    lineHeight: "1.4",
   },
-
   errorBox: {
     marginBottom: "16px",
     padding: "12px",
@@ -165,7 +166,6 @@ const styles = {
     textAlign: "left",
     lineHeight: "1.35",
   },
-
   fieldGroup: {
     textAlign: "left",
     marginBottom: "14px",
@@ -188,7 +188,6 @@ const styles = {
     color: "#111827",
     boxSizing: "border-box",
   },
-
   button: {
     width: "100%",
     padding: "12px",
@@ -206,12 +205,11 @@ const styles = {
     opacity: 0.85,
     cursor: "not-allowed",
   },
-
-  row: {
-    display: "flex",
-    justifyContent: "center",
-    gap: "12px",
+  smallText: {
     marginTop: "14px",
+    marginBottom: 0,
+    fontSize: "13px",
+    color: "#6b7280",
   },
   linkButton: {
     border: "none",
@@ -223,16 +221,13 @@ const styles = {
     fontWeight: 700,
     fontSize: "13px",
     textDecoration: "underline",
-    whiteSpace: "nowrap",
   },
-
   disclaimer: {
     marginTop: "16px",
     maxWidth: "360px",
     fontSize: "13px",
     color: "#6b7280",
     textAlign: "center",
-    lineHeight: "1.45",
+    lineHeight: "1.4",
   },
 };
-

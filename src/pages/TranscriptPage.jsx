@@ -1,22 +1,140 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { doc, getDoc } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+
+import { auth, db } from "../firebase";
 
 export default function TranscriptPage() {
   const navigate = useNavigate();
 
-  // PLACEHOLDER
-  const transcript = useMemo(
-    () => [
-      { speaker: "Therapist", text: "How have things been since last week?", ts: "00:00" },
-      { speaker: "Client", text: "A bit up and down. I’ve been struggling with sleep again.", ts: "00:08" },
-      { speaker: "Therapist", text: "When is it worst — falling asleep or staying asleep?", ts: "00:16" },
-      { speaker: "Client", text: "Mostly staying asleep. I wake up and my mind starts racing.", ts: "00:25" },
-      { speaker: "Therapist", text: "What does your mind go to in those moments?", ts: "00:35" },
-      { speaker: "Client", text: "Work, money, and whether I’m letting people down.", ts: "00:45" },
-      { speaker: "Therapist", text: "Let’s slow that down together and notice what’s happening in your body.", ts: "00:58" },
-    ],
-    []
-  );
+  const [uid, setUid] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [rawTranscript, setRawTranscript] = useState(""); // stored as string on the session doc
+  const [summaryText, setSummaryText] = useState(""); // optional, if present
+
+  const clientId = useMemo(() => localStorage.getItem("selectedClientId"), []);
+  const sessionId = useMemo(() => localStorage.getItem("selectedSessionId"), []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid || null);
+      setAuthReady(true);
+      if (!user) navigate("/", { replace: true });
+    });
+    return () => unsub();
+  }, [navigate]);
+
+  // Minimal “not diarised” reformat:
+  // - Accepts a transcript that is just a big blob of text
+  // - Splits into readable paragraphs
+  // - Optionally tries to split by speaker labels if they exist (e.g. "Therapist:" "Client:")
+  const formattedBlocks = useMemo(() => {
+    const t = (rawTranscript || "").trim();
+    if (!t) return [];
+
+    // If it looks diarised already (has "Client:" or "Therapist:"), split by those labels.
+    const hasSpeakerLabels =
+      /(^|\n)\s*(therapist|client|counsellor|counselor)\s*:/i.test(t);
+
+    if (hasSpeakerLabels) {
+      // Split while keeping labels
+      const parts = t
+        .replace(/\r\n/g, "\n")
+        .split(/\n(?=\s*(therapist|client|counsellor|counselor)\s*:)/i)
+        .map((p) => p.trim())
+        .filter(Boolean);
+
+      return parts.map((p, idx) => {
+        const m = p.match(/^\s*([A-Za-z]+)\s*:\s*([\s\S]*)$/);
+        const speaker = m ? m[1] : "Speaker";
+        const text = m ? m[2].trim() : p;
+        return { key: `b-${idx}`, speaker, text };
+      });
+    }
+
+    // Otherwise: not diarised → split into paragraphs by sentence-ish chunking.
+    // Strategy: split on double newlines first; if none, chunk by ~2–3 sentences.
+    const normalised = t.replace(/\r\n/g, "\n");
+
+    const paras = normalised
+      .split(/\n{2,}/g)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    if (paras.length > 1) {
+      return paras.map((text, idx) => ({ key: `p-${idx}`, speaker: "", text }));
+    }
+
+    // No paragraph breaks: chunk by sentences into readable blocks
+    const sentences = normalised
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const blocks = [];
+    let buf = [];
+    for (const s of sentences) {
+      buf.push(s);
+      if (buf.length >= 3) {
+        blocks.push(buf.join(" "));
+        buf = [];
+      }
+    }
+    if (buf.length) blocks.push(buf.join(" "));
+
+    return blocks.map((text, idx) => ({ key: `c-${idx}`, speaker: "", text }));
+  }, [rawTranscript]);
+
+  useEffect(() => {
+    const run = async () => {
+      if (!authReady || !uid) return;
+
+      if (!clientId || !sessionId) {
+        setError("No session selected. Please open a session from the client profile.");
+        setLoading(false);
+        return;
+      }
+
+      setError("");
+      setLoading(true);
+
+      try {
+        const sessionRef = doc(
+          db,
+          "users",
+          uid,
+          "clients",
+          clientId,
+          "sessions",
+          sessionId
+        );
+
+        const snap = await getDoc(sessionRef);
+        if (!snap.exists()) {
+          setError("Session not found.");
+          setLoading(false);
+          return;
+        }
+
+        const data = snap.data() || {};
+        setRawTranscript(data.transcript || "");
+        setSummaryText(data.summaryText || "");
+      } catch (e) {
+        console.error(e);
+        setError("Could not load transcript. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    run();
+  }, [authReady, uid, clientId, sessionId]);
 
   return (
     <div style={styles.page}>
@@ -34,26 +152,51 @@ export default function TranscriptPage() {
 
             <div style={styles.headerText}>
               <div style={styles.headerTitle}>Transcript</div>
-              <div style={styles.headerSub}>Session transcript (placeholder)</div>
+              <div style={styles.headerSub}>
+                {loading ? "Loading…" : "Session transcript"}
+              </div>
             </div>
           </div>
 
+          {error ? <div style={styles.errorBox}>{error}</div> : null}
+
+          {summaryText ? (
+            <div style={styles.summaryBox}>
+              <div style={styles.summaryTitle}>AI summary</div>
+              <div style={styles.summaryText}>{summaryText}</div>
+            </div>
+          ) : null}
+
           <div style={styles.transcriptWindow}>
-            {transcript.map((line, idx) => (
-              <div key={idx} style={styles.line}>
-                <div style={styles.lineTop}>
-                  <span style={styles.speaker}>{line.speaker}</span>
-                  <span style={styles.time}>{line.ts}</span>
-                </div>
-                <div style={styles.text}>{line.text}</div>
+            {loading ? (
+              <div style={styles.loadingHint}>Loading transcript…</div>
+            ) : !rawTranscript.trim() ? (
+              <div style={styles.emptyState}>
+                <p style={styles.emptyTitle}>No transcript yet</p>
+                <p style={styles.emptyText}>
+                  Record or upload a session to generate a transcript.
+                </p>
               </div>
-            ))}
+            ) : formattedBlocks.length === 0 ? (
+              <div style={styles.loadingHint}>Formatting transcript…</div>
+            ) : (
+              formattedBlocks.map((b) => (
+                <div key={b.key} style={styles.line}>
+                  {b.speaker ? (
+                    <div style={styles.lineTop}>
+                      <span style={styles.speaker}>{b.speaker}</span>
+                    </div>
+                  ) : null}
+                  <div style={styles.text}>{b.text}</div>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
         <p style={styles.disclaimer}>
-          This transcript view is UI-only for now. Later it will be loaded from the
-          selected session and support highlighting, search, and timestamps.
+          This transcript is stored as raw text for now. We’re formatting it into readable
+          blocks. Proper diarisation (speaker separation) can be added later.
         </p>
       </div>
     </div>
@@ -122,6 +265,37 @@ const styles = {
     marginTop: "2px",
   },
 
+  errorBox: {
+    marginBottom: "12px",
+    padding: "12px",
+    borderRadius: "10px",
+    background: "#fff1f2",
+    border: "1px solid #fecdd3",
+    color: "#9f1239",
+    fontSize: "13px",
+    lineHeight: "1.35",
+  },
+
+  summaryBox: {
+    border: "1px solid #e5e7eb",
+    background: "#fafafa",
+    borderRadius: "12px",
+    padding: "14px",
+    marginBottom: "12px",
+  },
+  summaryTitle: {
+    fontSize: "13px",
+    fontWeight: 900,
+    color: "#111827",
+    marginBottom: "6px",
+  },
+  summaryText: {
+    fontSize: "14px",
+    color: "#374151",
+    lineHeight: 1.55,
+    whiteSpace: "pre-wrap",
+  },
+
   transcriptWindow: {
     height: "520px",
     overflowY: "auto",
@@ -132,6 +306,11 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: "10px",
+  },
+
+  loadingHint: {
+    color: "#6b7280",
+    fontSize: "14px",
   },
 
   line: {
@@ -150,19 +329,35 @@ const styles = {
   },
   speaker: {
     fontSize: "13px",
-    fontWeight: 800,
+    fontWeight: 900,
     color: "#111827",
-  },
-  time: {
-    fontSize: "12px",
-    color: "#6b7280",
-    whiteSpace: "nowrap",
   },
   text: {
     fontSize: "14px",
     color: "#374151",
     lineHeight: 1.5,
     whiteSpace: "pre-wrap",
+  },
+
+  emptyState: {
+    border: "1px dashed #d1d5db",
+    borderRadius: "12px",
+    padding: "16px",
+    background: "#fafafa",
+    textAlign: "center",
+  },
+  emptyTitle: {
+    margin: 0,
+    fontSize: "14px",
+    fontWeight: 800,
+    color: "#111827",
+  },
+  emptyText: {
+    marginTop: "6px",
+    marginBottom: 0,
+    fontSize: "13px",
+    color: "#6b7280",
+    lineHeight: "1.4",
   },
 
   disclaimer: {

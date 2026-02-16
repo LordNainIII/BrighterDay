@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import BrighterDay from "../assets/BrighterDay.png";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { auth, db } from "../firebase";
 
 export default function NewClientPage() {
   const navigate = useNavigate();
@@ -23,8 +24,7 @@ export default function NewClientPage() {
   const phoneHint = useMemo(() => {
     const v = clientPhone.trim();
     if (!v) return "Optional — useful for appointment reminders.";
-    if (!/^[0-9+()\-\s]{7,20}$/.test(v))
-      return "Please enter a valid phone number.";
+    if (!/^[0-9+()\-\s]{7,20}$/.test(v)) return "Please enter a valid phone number.";
     return "";
   }, [clientPhone]);
 
@@ -52,10 +52,26 @@ export default function NewClientPage() {
     setLoading(true);
 
     try {
+      const user = auth.currentUser;
+      if (!user) {
+        setError("You must be signed in to create a client.");
+        return;
+      }
 
-      await new Promise((r) => setTimeout(r, 700));
-      navigate("/clientprofile");
-    } catch {
+      const clientsRef = collection(db, "users", user.uid, "clients");
+
+      const docRef = await addDoc(clientsRef, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: clientEmail.trim() ? clientEmail.trim().toLowerCase() : "",
+        phone: clientPhone.trim(),
+        createdAt: serverTimestamp(),
+        summary: "",
+      });
+
+      // Simple for now: go back to list (or profile later)
+      navigate("/clientlist", { state: { createdClientId: docRef.id } });
+    } catch (e) {
       setError("Could not create client. Please try again.");
     } finally {
       setLoading(false);
@@ -65,7 +81,6 @@ export default function NewClientPage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
-
         <div style={styles.card}>
           <h1 style={styles.title}>New client</h1>
           <p style={styles.subtitle}>Add a client contact record.</p>
@@ -197,7 +212,6 @@ const styles = {
     color: "#6b7280",
     lineHeight: "1.4",
   },
-
   errorBox: {
     marginBottom: "16px",
     padding: "12px",
@@ -209,13 +223,11 @@ const styles = {
     textAlign: "left",
     lineHeight: "1.35",
   },
-
   twoCol: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
     gap: "12px",
   },
-
   fieldGroup: {
     textAlign: "left",
     marginBottom: "14px",
@@ -244,7 +256,6 @@ const styles = {
     color: "#6b7280",
     lineHeight: "1.35",
   },
-
   button: {
     width: "100%",
     padding: "12px",
@@ -262,7 +273,6 @@ const styles = {
     opacity: 0.85,
     cursor: "not-allowed",
   },
-
   smallText: {
     marginTop: "14px",
     marginBottom: 0,
@@ -282,7 +292,6 @@ const styles = {
     textDecoration: "underline",
     whiteSpace: "nowrap",
   },
-
   disclaimer: {
     marginTop: "16px",
     maxWidth: "420px",

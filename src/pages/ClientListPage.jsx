@@ -1,41 +1,68 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { collection, onSnapshot, orderBy, query as fsQuery } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+
 import BrighterDay from "../assets/BrighterDay.png";
+import { auth, db } from "../firebase";
 
 export default function ClientListPage() {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
 
-  // UI-only placeholder data (goimg to change this later)
-  const clients = useMemo(
-    () => [
-      { id: "c1", firstName: "Maya", lastName: "Hughes", email: "maya@example.com", phone: "07911 234567" },
-      { id: "c2", firstName: "Tom", lastName: "Bennett", email: "", phone: "" },
-      { id: "c3", firstName: "Aisha", lastName: "Khan", email: "aisha.khan@example.com", phone: "" },
-      { id: "c4", firstName: "Ben", lastName: "Carter", email: "", phone: "07123 555444" },
-      { id: "c5", firstName: "Sophie", lastName: "Woods", email: "sophie.woods@example.com", phone: "" },
-      { id: "c6", firstName: "Noah", lastName: "Patel", email: "", phone: "" },
-      { id: "c7", firstName: "Ella", lastName: "Reed", email: "ella.reed@example.com", phone: "07888 999000" },
-      { id: "c8", firstName: "James", lastName: "Foster", email: "", phone: "" },
-      { id: "c9", firstName: "Zara", lastName: "Ali", email: "zara.ali@example.com", phone: "" },
-      { id: "c10", firstName: "Liam", lastName: "Price", email: "", phone: "" },
-      { id: "c11", firstName: "Hannah", lastName: "Moore", email: "hannah.moore@example.com", phone: "" },
-      { id: "c12", firstName: "Daniel", lastName: "Scott", email: "", phone: "07777 222333" },
-    ],
-    []
-  );
+  const [query, setQuery] = useState("");
+  const [clients, setClients] = useState([]);
+  const [authReady, setAuthReady] = useState(false);
+  const [uid, setUid] = useState(null);
+  const [error, setError] = useState("");
+
+  // Watch auth state (so refreshes still work)
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid || null);
+      setAuthReady(true);
+      if (!user) {
+        // if you want: send them to login
+        navigate("/", { replace: true });
+      }
+    });
+
+    return () => unsub();
+  }, [navigate]);
+
+  // Subscribe to this user's clients collection
+  useEffect(() => {
+    if (!authReady || !uid) return;
+
+    setError("");
+
+    const clientsRef = collection(db, "users", uid, "clients");
+    const q = fsQuery(clientsRef, orderBy("createdAt", "desc"));
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        }));
+        setClients(rows);
+      },
+      () => setError("Could not load clients. Please refresh and try again.")
+    );
+
+    return () => unsub();
+  }, [authReady, uid]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return clients;
 
     return clients.filter((c) => {
-      const full = `${c.firstName} ${c.lastName}`.toLowerCase();
-      return (
-        full.includes(q) ||
-        (c.email || "").toLowerCase().includes(q) ||
-        (c.phone || "").toLowerCase().includes(q)
-      );
+      const full = `${c.firstName || ""} ${c.lastName || ""}`.toLowerCase();
+      const email = (c.email || "").toLowerCase();
+      const phone = (c.phone || "").toLowerCase();
+
+      return full.includes(q) || email.includes(q) || phone.includes(q);
     });
   }, [clients, query]);
 
@@ -43,6 +70,13 @@ export default function ClientListPage() {
     const a = (firstName || "").trim()[0] || "";
     const b = (lastName || "").trim()[0] || "";
     return (a + b).toUpperCase();
+  };
+
+  const openClient = (clientId) => {
+    // Keep simple: store selected clientId for profile page to use later
+    // You can move this into URL params later when you're ready.
+    localStorage.setItem("selectedClientId", clientId);
+    navigate("/clientprofile");
   };
 
   return (
@@ -60,7 +94,7 @@ export default function ClientListPage() {
             <button
               type="button"
               style={styles.primarySmallButton}
-              onClick={() => navigate("/new-client")}
+              onClick={() => navigate("/newclient")}
             >
               + New
             </button>
@@ -75,6 +109,8 @@ export default function ClientListPage() {
             />
           </div>
 
+          {error ? <div style={styles.errorBox}>{error}</div> : null}
+
           <div style={styles.list} role="list">
             {filtered.length === 0 ? (
               <div style={styles.emptyState}>
@@ -85,7 +121,7 @@ export default function ClientListPage() {
                 <button
                   type="button"
                   style={styles.button}
-                  onClick={() => navigate("/new-client")}
+                  onClick={() => navigate("/newclient")}
                 >
                   Create client
                 </button>
@@ -96,7 +132,7 @@ export default function ClientListPage() {
                   key={c.id}
                   type="button"
                   style={styles.tile}
-                  onClick={() => navigate(`/clients/${c.id}`)}
+                  onClick={() => openClient(c.id)}
                 >
                   <div style={styles.avatar}>
                     {initials(c.firstName, c.lastName)}
@@ -104,7 +140,7 @@ export default function ClientListPage() {
 
                   <div style={styles.tileMain}>
                     <div style={styles.clientName}>
-                      {c.firstName} {c.lastName}
+                      {(c.firstName || "").trim()} {(c.lastName || "").trim()}
                     </div>
                   </div>
 
@@ -206,6 +242,17 @@ const styles = {
     fontSize: "14px",
     color: "#111827",
     boxSizing: "border-box",
+  },
+
+  errorBox: {
+    marginBottom: "12px",
+    padding: "12px",
+    borderRadius: "10px",
+    background: "#fff1f2",
+    border: "1px solid #fecdd3",
+    color: "#9f1239",
+    fontSize: "13px",
+    lineHeight: "1.35",
   },
 
   list: {

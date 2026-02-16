@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import BrighterDay from "../assets/BrighterDay.png";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { auth, db } from "../firebase";
 
-export default function RegisterPage() {
+export default function RegistrationPage() {
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
@@ -14,7 +16,7 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
 
   const validate = () => {
-    if (!name.trim()) return "Please enter your full name.";
+    if (!name.trim()) return "Please enter your name.";
     if (!email.trim()) return "Please enter your email address.";
     if (!/^\S+@\S+\.\S+$/.test(email)) return "Please enter a valid email address.";
     if (password.length < 8) return "Password must be at least 8 characters long.";
@@ -33,10 +35,29 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      await new Promise((r) => setTimeout(r, 700));
+      const cleanEmail = email.trim().toLowerCase();
+
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name: name.trim(),
+        email: cleanEmail,
+        createdAt: serverTimestamp(),
+      });
+
       navigate("/newclient");
     } catch (e) {
-      setError("Something went wrong. Please try again.");
+      const code = e?.code || "";
+
+      if (code === "auth/email-already-in-use") {
+        setError("That email is already in use.");
+      } else if (code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+      } else if (code === "auth/weak-password") {
+        setError("Password is too weak. Use at least 8 characters.");
+      } else {
+        setError("Registration failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -45,7 +66,6 @@ export default function RegisterPage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
-
         <div style={styles.card}>
           <h1 style={styles.title}>Create your account</h1>
           <p style={styles.subtitle}>Register to upload and transcribe session audio</p>
@@ -53,12 +73,12 @@ export default function RegisterPage() {
           {error ? <div style={styles.errorBox}>{error}</div> : null}
 
           <div style={styles.fieldGroup}>
-            <label style={styles.label}>Full name</label>
+            <label style={styles.label}>Name</label>
             <input
               style={styles.input}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Archie"
+              placeholder="e.g., James"
               autoComplete="name"
               disabled={loading}
             />
@@ -131,8 +151,8 @@ export default function RegisterPage() {
         </div>
 
         <p style={styles.disclaimer}>
-          By creating an account, you confirm you have the right to upload audio and that
-          it may contain sensitive data.
+          By creating an account, you confirm you have the right to upload audio and that it
+          may contain sensitive data.
         </p>
       </div>
     </div>
@@ -174,7 +194,6 @@ const styles = {
     fontSize: "14px",
     color: "#6b7280",
   },
-
   errorBox: {
     marginBottom: "16px",
     padding: "12px",
@@ -186,7 +205,6 @@ const styles = {
     textAlign: "left",
     lineHeight: "1.35",
   },
-
   fieldGroup: {
     textAlign: "left",
     marginBottom: "14px",
@@ -209,7 +227,6 @@ const styles = {
     color: "#111827",
     boxSizing: "border-box",
   },
-
   button: {
     width: "100%",
     padding: "12px",
@@ -227,7 +244,6 @@ const styles = {
     opacity: 0.85,
     cursor: "not-allowed",
   },
-
   smallText: {
     marginTop: "14px",
     marginBottom: 0,
@@ -245,7 +261,6 @@ const styles = {
     fontSize: "13px",
     textDecoration: "underline",
   },
-
   disclaimer: {
     marginTop: "16px",
     maxWidth: "360px",

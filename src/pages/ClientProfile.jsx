@@ -1,35 +1,158 @@
-import { useMemo } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+
+import { auth, db } from "../firebase";
 
 export default function ClientProfilePage() {
   const navigate = useNavigate();
-  const { id } = useParams();
 
-  // UI-only placeholder client + sessions (again, will change later)
-  const client = useMemo(
-    () => ({
-      id,
-      firstName: "Maya",
-      lastName: "Hughes",
-    }),
-    [id]
-  );
+  const [uid, setUid] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
 
-  const sessions = useMemo(
-    () => [
-      { id: "s1", date: "20 Jan 2026", time: "18:30", length: "50 min", status: "Complete" },
-      { id: "s2", date: "13 Jan 2026", time: "18:30", length: "50 min", status: "Complete" },
-      { id: "s3", date: "06 Jan 2026", time: "18:30", length: "50 min", status: "Complete" },
-      { id: "s4", date: "30 Dec 2025", time: "18:30", length: "50 min", status: "Complete" },
-      { id: "s5", date: "16 Dec 2025", time: "18:30", length: "50 min", status: "Complete" },
-    ],
-    []
-  );
+  const [client, setClient] = useState(null);
+  const [loadingClient, setLoadingClient] = useState(true);
+
+  const [sessions, setSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(true);
+
+  const [error, setError] = useState("");
+
+  const clientId = useMemo(() => localStorage.getItem("selectedClientId"), []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid || null);
+      setAuthReady(true);
+      if (!user) navigate("/", { replace: true });
+    });
+    return () => unsub();
+  }, [navigate]);
+
+  // Load client doc
+  useEffect(() => {
+    if (!authReady || !uid) return;
+
+    if (!clientId) {
+      setError("No client selected. Please choose a client from the list.");
+      setLoadingClient(false);
+      setLoadingSessions(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        setError("");
+        setLoadingClient(true);
+
+        const ref = doc(db, "users", uid, "clients", clientId);
+        const snap = await getDoc(ref);
+
+        if (!snap.exists()) {
+          setError("Client not found. It may have been deleted.");
+          setClient(null);
+          return;
+        }
+
+        setClient({ id: snap.id, ...snap.data() });
+      } catch {
+        setError("Could not load client profile. Please try again.");
+      } finally {
+        setLoadingClient(false);
+      }
+    })();
+  }, [authReady, uid, clientId]);
+
+  // Subscribe to sessions (matches your current field names)
+  useEffect(() => {
+    if (!authReady || !uid || !clientId) return;
+
+    setLoadingSessions(true);
+
+    const sessionsRef = collection(
+      db,
+      "users",
+      uid,
+      "clients",
+      clientId,
+      "sessions"
+    );
+
+    const unsub = onSnapshot(
+      sessionsRef,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+        // Sort newest first.
+        // If "date" is a Firestore Timestamp -> sort by seconds.
+        // If "date" is a string -> fallback to string compare.
+        rows.sort((a, b) => {
+          const aTs = a?.date?.seconds ? a.date.seconds : null;
+          const bTs = b?.date?.seconds ? b.date.seconds : null;
+
+          if (aTs != null && bTs != null) return bTs - aTs;
+
+          return String(b.date || "").localeCompare(String(a.date || ""));
+        });
+
+        setSessions(rows);
+        setLoadingSessions(false);
+      },
+      () => {
+        setError("Could not load sessions. Please refresh and try again.");
+        setLoadingSessions(false);
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, uid, clientId]);
 
   const initials = (firstName, lastName) => {
     const a = (firstName || "").trim()[0] || "";
     const b = (lastName || "").trim()[0] || "";
     return (a + b).toUpperCase();
+  };
+
+  const clientName = client
+    ? `${(client.firstName || "").trim()} ${(client.lastName || "").trim()}`
+    : "";
+
+  const hasText = (v) => typeof v === "string" && v.trim().length > 0;
+
+  // ✅ Fix: render Firestore Timestamp safely
+  const formatMaybeTimestamp = (value) => {
+    if (!value) return "Session";
+
+    // Firestore Timestamp object (has toDate())
+    if (typeof value?.toDate === "function") {
+      const d = value.toDate();
+      return d.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    }
+
+    // Sometimes you get a plain object {seconds, nanoseconds}
+    if (typeof value === "object" && value?.seconds) {
+      const d = new Date(value.seconds * 1000);
+      return d.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    }
+
+    // Otherwise assume it's already a string
+    if (typeof value === "string") return value;
+
+    return "Session";
+  };
+
+  const openSession = (sessionId) => {
+    localStorage.setItem("selectedSessionId", sessionId);
+    navigate("/chatAI");
   };
 
   return (
@@ -55,75 +178,92 @@ export default function ClientProfilePage() {
             </button>
           </div>
 
-          <div style={styles.profileRow}>
-            <div style={styles.avatar}>
-              {initials(client.firstName, client.lastName)}
-            </div>
+          {error ? <div style={styles.errorBox}>{error}</div> : null}
 
-            <div style={styles.nameBlock}>
-              <h1 style={styles.title}>
-                {client.firstName} {client.lastName}
-              </h1>
-              <p style={styles.subtitle}>Client profile</p>
-            </div>
-          </div>
+          {loadingClient ? (
+            <div style={styles.loadingBox}>Loading client…</div>
+          ) : client ? (
+            <>
+              <div style={styles.profileRow}>
+                <div style={styles.avatar}>
+                  {initials(client.firstName, client.lastName)}
+                </div>
 
-          <div style={styles.summaryBox}>
-            <div style={styles.sectionHeaderRow}>
-              <h2 style={styles.sectionTitle}>Summary</h2>
-              <span style={styles.sectionHint}>AI-generated (coming soon)</span>
-            </div>
-
-            <p style={styles.summaryText}>
-              This is a placeholder for the client’s AI summary. It will
-              eventually highlight key themes, progress over time, and relevant
-              clinical signals to explore — written in calm, professional prose.
-            </p>
-          </div>
-
-          <div style={styles.sessionsHeaderRow}>
-            <h2 style={styles.sectionTitle}>Sessions</h2>
-          </div>
-
-          <div style={styles.sessionList} role="list">
-            {sessions.length === 0 ? (
-              <div style={styles.emptyState}>
-                <p style={styles.emptyTitle}>No sessions yet</p>
-                <p style={styles.emptyText}>
-                  Record a new session to generate transcripts and summaries.
-                </p>
-                <button
-                  type="button"
-                  style={styles.primaryButtonFull}
-                  onClick={() => navigate("/upload")}
-                >
-                  Record new session
-                </button>
+                <div style={styles.nameBlock}>
+                  <h1 style={styles.title}>{clientName}</h1>
+                  <p style={styles.subtitle}>Client profile</p>
+                </div>
               </div>
-            ) : (
-              sessions.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  style={styles.sessionTile}
-                  onClick={() => navigate(`/clients/${client.id}/sessions/${s.id}`)}
-                >
-                  <div style={styles.sessionTopRow}>
-                    <div style={styles.sessionTitleText}>{s.date}</div>
-                    <div style={styles.chev}>›</div>
-                  </div>
 
-                  <div style={styles.sessionMeta}>
-                    <span style={styles.metaItem}>{s.time}</span>
-                    <span style={styles.dot}>•</span>
-                    <span style={styles.metaItem}>{s.length}</span>
-                    <span style={styles.dot}>•</span>
-                    <span style={styles.metaItem}>{s.status}</span>
+              <div style={styles.summaryBox}>
+                <div style={styles.sectionHeaderRow}>
+                  <h2 style={styles.sectionTitle}>Summary</h2>
+                  <span style={styles.sectionHint}>AI-generated (coming soon)</span>
+                </div>
+
+                <p style={styles.summaryText}>
+                  This is a placeholder for the client’s AI summary. It will eventually
+                  highlight key themes, progress over time, and relevant clinical signals
+                  to explore — written in calm, professional prose.
+                </p>
+              </div>
+
+              <div style={styles.sessionsHeaderRow}>
+                <h2 style={styles.sectionTitle}>Sessions</h2>
+              </div>
+
+              <div style={styles.sessionList} role="list">
+                {loadingSessions ? (
+                  <div style={styles.loadingBox}>Loading sessions…</div>
+                ) : sessions.length === 0 ? (
+                  <div style={styles.emptyState}>
+                    <p style={styles.emptyTitle}>No sessions yet</p>
+                    <p style={styles.emptyText}>
+                      Record a new session to generate transcripts and summaries.
+                    </p>
+                    <button
+                      type="button"
+                      style={styles.primaryButtonFull}
+                      onClick={() => navigate("/record")}
+                    >
+                      Record new session
+                    </button>
                   </div>
-                </button>
-              ))
-            )}
-          </div>
+                ) : (
+                  sessions.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      style={styles.sessionTile}
+                      onClick={() => openSession(s.id)}
+                    >
+                      <div style={styles.sessionTopRow}>
+                        {/* ✅ Fix: never render the timestamp object directly */}
+                        <div style={styles.sessionTitleText}>
+                          {formatMaybeTimestamp(s.date)}
+                        </div>
+                        <div style={styles.chev}>›</div>
+                      </div>
+
+                      <div style={styles.sessionMeta}>
+                        <span style={styles.metaItem}>
+                          {hasText(s.summaryText)
+                            ? "Summary available"
+                            : "No summary yet"}
+                        </span>
+                        <span style={styles.dot}>•</span>
+                        <span style={styles.metaItem}>
+                          {hasText(s.Transcript)
+                            ? "Transcript available"
+                            : "No transcript yet"}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          ) : null}
         </div>
 
         <p style={styles.disclaimer}>
@@ -207,6 +347,27 @@ const styles = {
     fontWeight: 800,
     cursor: "pointer",
     boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+  },
+
+  errorBox: {
+    marginBottom: "16px",
+    padding: "12px",
+    borderRadius: "10px",
+    background: "#fff1f2",
+    border: "1px solid #fecdd3",
+    color: "#9f1239",
+    fontSize: "13px",
+    lineHeight: "1.35",
+  },
+
+  loadingBox: {
+    border: "1px solid #e5e7eb",
+    background: "#fafafa",
+    borderRadius: "12px",
+    padding: "16px",
+    color: "#6b7280",
+    fontSize: "14px",
+    marginBottom: "12px",
   },
 
   profileRow: {
@@ -370,3 +531,4 @@ const styles = {
     lineHeight: "1.45",
   },
 };
+

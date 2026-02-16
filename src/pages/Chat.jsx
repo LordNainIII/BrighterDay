@@ -1,25 +1,46 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  addDoc,
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+} from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+
+import { auth, db } from "../firebase";
 
 export default function Chat() {
   const navigate = useNavigate();
 
+  const [uid, setUid] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState(() => [
-    {
-      id: "m1",
-      role: "assistant",
-      text:
-        "Hi — this is the session chat. Ask questions about this session (summary, themes, risk flags, next steps).",
-      ts: "Now",
-    },
-  ]);
+  const [messages, setMessages] = useState([]);
+  const [loadingMessages, setLoadingMessages] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
 
   const listRef = useRef(null);
+
+  const clientId = useMemo(() => localStorage.getItem("selectedClientId"), []);
+  const sessionId = useMemo(() => localStorage.getItem("selectedSessionId"), []);
 
   const sessionLabel = useMemo(() => {
     return "Session";
   }, []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid || null);
+      setAuthReady(true);
+      if (!user) navigate("/", { replace: true });
+    });
+    return () => unsub();
+  }, [navigate]);
 
   const scrollToBottom = () => {
     const el = listRef.current;
@@ -27,30 +48,135 @@ export default function Chat() {
     el.scrollTop = el.scrollHeight;
   };
 
+  const formatTime = (ts) => {
+    if (!ts) return "";
+    if (typeof ts?.toDate === "function") {
+      const d = ts.toDate();
+      return d.toLocaleString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    }
+    if (typeof ts === "object" && ts?.seconds) {
+      const d = new Date(ts.seconds * 1000);
+      return d.toLocaleString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    }
+    return "";
+  };
+
+  // ✅ Load messages from Firestore
+  useEffect(() => {
+    if (!authReady || !uid) return;
+
+    if (!clientId || !sessionId) {
+      setError("No session selected. Please open a session from the client profile.");
+      setLoadingMessages(false);
+      return;
+    }
+
+    setError("");
+    setLoadingMessages(true);
+
+    const messagesRef = collection(
+      db,
+      "users",
+      uid,
+      "clients",
+      clientId,
+      "sessions",
+      sessionId,
+      "messages"
+    );
+
+    const qy = query(messagesRef, orderBy("createdAt", "asc"));
+
+    const unsub = onSnapshot(
+      qy,
+      (snap) => {
+        const rows = snap.docs.map((d) => {
+          const data = d.data() || {};
+          return {
+            id: d.id,
+            role: data.role === "user" ? "user" : "assistant",
+            text: data.content || "",
+            ts: formatTime(data.createdAt),
+          };
+        });
+
+        if (rows.length === 0) {
+          setMessages([
+            {
+              id: "m1",
+              role: "assistant",
+              text:
+                "Hi — this is the session chat. Ask questions about this session (summary, themes, risk flags, next steps).",
+              ts: "Now",
+            },
+          ]);
+        } else {
+          setMessages(rows);
+        }
+
+        setLoadingMessages(false);
+        setTimeout(scrollToBottom, 0);
+      },
+      (err) => {
+        console.error(err);
+        setError(
+          "Could not load messages. Ensure each message has a createdAt field (timestamp)."
+        );
+        setLoadingMessages(false);
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, uid, clientId, sessionId]);
+
+  // ✅ Send writes to Firestore (user message + placeholder assistant reply)
   const send = async () => {
     const text = input.trim();
-    if (!text) return;
+    if (!text || !uid || sending) return;
 
-    setMessages((prev) => [
-      ...prev,
-      { id: `u-${Date.now()}`, role: "user", text, ts: "Now" },
-    ]);
+    if (!clientId || !sessionId) {
+      setError("No session selected.");
+      return;
+    }
+
+    setError("");
     setInput("");
+    setSending(true);
 
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}`,
-          role: "assistant",
-          text:
-            "Got it. (Placeholder response) Later this will reference the transcript, session notes, and your AI summary pipeline.",
-          ts: "Now",
-        },
-      ]);
-    }, 450);
+    try {
+      const messagesRef = collection(
+        db,
+        "users",
+        uid,
+        "clients",
+        clientId,
+        "sessions",
+        sessionId,
+        "messages"
+      );
 
-    setTimeout(scrollToBottom, 0);
+      await addDoc(messagesRef, {
+        role: "user",
+        content: text,
+        createdAt: serverTimestamp(),
+      });
+
+      await addDoc(messagesRef, {
+        role: "assistant",
+        content:
+          "Got it. (Placeholder response) Later this will use AI + transcript context.",
+        createdAt: serverTimestamp(),
+      });
+
+      setTimeout(scrollToBottom, 0);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to send message. Please try again.");
+      // Restore text so the user doesn't lose it
+      setInput(text);
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -81,30 +207,36 @@ export default function Chat() {
             </button>
           </div>
 
+          {error ? <div style={styles.errorBox}>{error}</div> : null}
+
           <div style={styles.chatWindow} ref={listRef}>
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                style={{
-                  ...styles.messageRow,
-                  ...(m.role === "user"
-                    ? styles.messageRowUser
-                    : styles.messageRowAssistant),
-                }}
-              >
+            {loadingMessages ? (
+              <div style={styles.loadingHint}>Loading messages…</div>
+            ) : (
+              messages.map((m) => (
                 <div
+                  key={m.id}
                   style={{
-                    ...styles.bubble,
+                    ...styles.messageRow,
                     ...(m.role === "user"
-                      ? styles.bubbleUser
-                      : styles.bubbleAssistant),
+                      ? styles.messageRowUser
+                      : styles.messageRowAssistant),
                   }}
                 >
-                  <div style={styles.bubbleText}>{m.text}</div>
-                  <div style={styles.bubbleMeta}>{m.ts}</div>
+                  <div
+                    style={{
+                      ...styles.bubble,
+                      ...(m.role === "user"
+                        ? styles.bubbleUser
+                        : styles.bubbleAssistant),
+                    }}
+                  >
+                    <div style={styles.bubbleText}>{m.text}</div>
+                    <div style={styles.bubbleMeta}>{m.ts}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
 
           <div style={styles.composer}>
@@ -113,12 +245,21 @@ export default function Chat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Type a message…"
+              disabled={sending}
               onKeyDown={(e) => {
                 if (e.key === "Enter") send();
               }}
             />
-            <button type="button" style={styles.sendButton} onClick={send}>
-              Send
+            <button
+              type="button"
+              style={{
+                ...styles.sendButton,
+                ...(sending ? styles.sendButtonDisabled : null),
+              }}
+              onClick={send}
+              disabled={sending}
+            >
+              {sending ? "Sending…" : "Send"}
             </button>
           </div>
         </div>
@@ -210,6 +351,17 @@ const styles = {
     flex: "0 0 auto",
   },
 
+  errorBox: {
+    marginBottom: "12px",
+    padding: "12px",
+    borderRadius: "10px",
+    background: "#fff1f2",
+    border: "1px solid #fecdd3",
+    color: "#9f1239",
+    fontSize: "13px",
+    lineHeight: "1.35",
+  },
+
   chatWindow: {
     height: "440px",
     overflowY: "auto",
@@ -220,6 +372,11 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: "10px",
+  },
+
+  loadingHint: {
+    color: "#6b7280",
+    fontSize: "14px",
   },
 
   messageRow: {
@@ -287,6 +444,10 @@ const styles = {
     cursor: "pointer",
     boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
     whiteSpace: "nowrap",
+  },
+  sendButtonDisabled: {
+    opacity: 0.85,
+    cursor: "not-allowed",
   },
 
   disclaimer: {
