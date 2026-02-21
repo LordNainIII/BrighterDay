@@ -15,21 +15,15 @@ export default function ClientListPage() {
   const [uid, setUid] = useState(null);
   const [error, setError] = useState("");
 
-  // Watch auth state (so refreshes still work)
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid || null);
       setAuthReady(true);
-      if (!user) {
-        // if you want: send them to login
-        navigate("/", { replace: true });
-      }
+      if (!user) navigate("/", { replace: true });
     });
-
     return () => unsub();
   }, [navigate]);
 
-  // Subscribe to this user's clients collection
   useEffect(() => {
     if (!authReady || !uid) return;
 
@@ -41,10 +35,7 @@ export default function ClientListPage() {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const rows = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setClients(rows);
       },
       () => setError("Could not load clients. Please refresh and try again.")
@@ -61,7 +52,6 @@ export default function ClientListPage() {
       const full = `${c.firstName || ""} ${c.lastName || ""}`.toLowerCase();
       const email = (c.email || "").toLowerCase();
       const phone = (c.phone || "").toLowerCase();
-
       return full.includes(q) || email.includes(q) || phone.includes(q);
     });
   }, [clients, query]);
@@ -73,10 +63,8 @@ export default function ClientListPage() {
   };
 
   const openClient = (clientId) => {
-    // Keep simple: store selected clientId for profile page to use later
-    // You can move this into URL params later when you're ready.
-    localStorage.setItem("selectedClientId", clientId);
-    navigate("/clientprofile");
+    // new route
+    navigate(`/clientprofile/${clientId}`);
   };
 
   return (
@@ -115,9 +103,7 @@ export default function ClientListPage() {
             {filtered.length === 0 ? (
               <div style={styles.emptyState}>
                 <p style={styles.emptyTitle}>No clients found</p>
-                <p style={styles.emptyText}>
-                  Try a different search or add a new client.
-                </p>
+                <p style={styles.emptyText}>Try a different search or add a new client.</p>
                 <button
                   type="button"
                   style={styles.button}
@@ -134,9 +120,7 @@ export default function ClientListPage() {
                   style={styles.tile}
                   onClick={() => openClient(c.id)}
                 >
-                  <div style={styles.avatar}>
-                    {initials(c.firstName, c.lastName)}
-                  </div>
+                  <div style={styles.avatar}>{initials(c.firstName, c.lastName)}</div>
 
                   <div style={styles.tileMain}>
                     <div style={styles.clientName}>
@@ -152,8 +136,8 @@ export default function ClientListPage() {
         </div>
 
         <p style={styles.disclaimer}>
-          Client details shown here are for clinical administration only. Ensure
-          appropriate consent and confidentiality at all times.
+          Client details shown here are for clinical administration only. Ensure appropriate
+          consent and confidentiality at all times.
         </p>
       </div>
     </div>

@@ -42,5 +42,9 @@ backend/.venv/
 # OS
 Thumbs.db
 
+# Environment files
+.env
+.env.*
+
 
 

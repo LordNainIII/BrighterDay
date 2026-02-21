@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -7,6 +7,7 @@ import { auth, db } from "../firebase";
 
 export default function ClientProfilePage() {
   const navigate = useNavigate();
+  const { clientId } = useParams();
 
   const [uid, setUid] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -18,8 +19,6 @@ export default function ClientProfilePage() {
   const [loadingSessions, setLoadingSessions] = useState(true);
 
   const [error, setError] = useState("");
-
-  const clientId = useMemo(() => localStorage.getItem("selectedClientId"), []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -35,7 +34,7 @@ export default function ClientProfilePage() {
     if (!authReady || !uid) return;
 
     if (!clientId) {
-      setError("No client selected. Please choose a client from the list.");
+      setError("Missing client id in the route. Please open a client from the list.");
       setLoadingClient(false);
       setLoadingSessions(false);
       return;
@@ -64,36 +63,25 @@ export default function ClientProfilePage() {
     })();
   }, [authReady, uid, clientId]);
 
-  // Subscribe to sessions (matches your current field names)
+  // Subscribe to sessions
   useEffect(() => {
     if (!authReady || !uid || !clientId) return;
 
     setLoadingSessions(true);
 
-    const sessionsRef = collection(
-      db,
-      "users",
-      uid,
-      "clients",
-      clientId,
-      "sessions"
-    );
+    const sessionsRef = collection(db, "users", uid, "clients", clientId, "sessions");
 
     const unsub = onSnapshot(
       sessionsRef,
       (snap) => {
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-        // Sort newest first.
-        // If "date" is a Firestore Timestamp -> sort by seconds.
-        // If "date" is a string -> fallback to string compare.
+        // newest first
         rows.sort((a, b) => {
-          const aTs = a?.date?.seconds ? a.date.seconds : null;
-          const bTs = b?.date?.seconds ? b.date.seconds : null;
-
+          const aTs = a?.createdAt?.seconds ? a.createdAt.seconds : null;
+          const bTs = b?.createdAt?.seconds ? b.createdAt.seconds : null;
           if (aTs != null && bTs != null) return bTs - aTs;
-
-          return String(b.date || "").localeCompare(String(a.date || ""));
+          return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
         });
 
         setSessions(rows);
@@ -120,11 +108,9 @@ export default function ClientProfilePage() {
 
   const hasText = (v) => typeof v === "string" && v.trim().length > 0;
 
-  // ✅ Fix: render Firestore Timestamp safely
   const formatMaybeTimestamp = (value) => {
     if (!value) return "Session";
 
-    // Firestore Timestamp object (has toDate())
     if (typeof value?.toDate === "function") {
       const d = value.toDate();
       return d.toLocaleDateString("en-GB", {
@@ -134,7 +120,6 @@ export default function ClientProfilePage() {
       });
     }
 
-    // Sometimes you get a plain object {seconds, nanoseconds}
     if (typeof value === "object" && value?.seconds) {
       const d = new Date(value.seconds * 1000);
       return d.toLocaleDateString("en-GB", {
@@ -144,15 +129,17 @@ export default function ClientProfilePage() {
       });
     }
 
-    // Otherwise assume it's already a string
     if (typeof value === "string") return value;
 
     return "Session";
   };
 
   const openSession = (sessionId) => {
-    localStorage.setItem("selectedSessionId", sessionId);
-    navigate("/chatAI");
+    navigate(`/chatAI?clientId=${clientId}&sessionId=${sessionId}`);
+  };
+
+  const goRecord = () => {
+    navigate(`/record?clientId=${clientId}`);
   };
 
   return (
@@ -169,11 +156,7 @@ export default function ClientProfilePage() {
               ← Clients
             </button>
 
-            <button
-              type="button"
-              style={styles.primaryButton}
-              onClick={() => navigate("/record")}
-            >
+            <button type="button" style={styles.primaryButton} onClick={goRecord}>
               Record new session
             </button>
           </div>
@@ -185,9 +168,7 @@ export default function ClientProfilePage() {
           ) : client ? (
             <>
               <div style={styles.profileRow}>
-                <div style={styles.avatar}>
-                  {initials(client.firstName, client.lastName)}
-                </div>
+                <div style={styles.avatar}>{initials(client.firstName, client.lastName)}</div>
 
                 <div style={styles.nameBlock}>
                   <h1 style={styles.title}>{clientName}</h1>
@@ -202,9 +183,9 @@ export default function ClientProfilePage() {
                 </div>
 
                 <p style={styles.summaryText}>
-                  This is a placeholder for the client’s AI summary. It will eventually
-                  highlight key themes, progress over time, and relevant clinical signals
-                  to explore — written in calm, professional prose.
+                  This is a placeholder for the client’s AI summary. It will eventually highlight
+                  key themes, progress over time, and relevant clinical signals to explore — written
+                  in calm, professional prose.
                 </p>
               </div>
 
@@ -221,11 +202,7 @@ export default function ClientProfilePage() {
                     <p style={styles.emptyText}>
                       Record a new session to generate transcripts and summaries.
                     </p>
-                    <button
-                      type="button"
-                      style={styles.primaryButtonFull}
-                      onClick={() => navigate("/record")}
-                    >
+                    <button type="button" style={styles.primaryButtonFull} onClick={goRecord}>
                       Record new session
                     </button>
                   </div>
@@ -238,24 +215,19 @@ export default function ClientProfilePage() {
                       onClick={() => openSession(s.id)}
                     >
                       <div style={styles.sessionTopRow}>
-                        {/* ✅ Fix: never render the timestamp object directly */}
                         <div style={styles.sessionTitleText}>
-                          {formatMaybeTimestamp(s.date)}
+                          {formatMaybeTimestamp(s.date || s.createdAt)}
                         </div>
                         <div style={styles.chev}>›</div>
                       </div>
 
                       <div style={styles.sessionMeta}>
                         <span style={styles.metaItem}>
-                          {hasText(s.summaryText)
-                            ? "Summary available"
-                            : "No summary yet"}
+                          {hasText(s.summaryText) ? "Summary available" : "No summary yet"}
                         </span>
                         <span style={styles.dot}>•</span>
                         <span style={styles.metaItem}>
-                          {hasText(s.Transcript)
-                            ? "Transcript available"
-                            : "No transcript yet"}
+                          {hasText(s.Transcript) ? "Transcript available" : "No transcript yet"}
                         </span>
                       </div>
                     </button>
@@ -267,9 +239,8 @@ export default function ClientProfilePage() {
         </div>
 
         <p style={styles.disclaimer}>
-          Brighter Day is a support tool and does not replace professional care.
-          Do not use this service for emergencies. Maintain appropriate consent
-          and confidentiality at all times.
+          Brighter Day is a support tool and does not replace professional care. Do not use this
+          service for emergencies. Maintain appropriate consent and confidentiality at all times.
         </p>
       </div>
     </div>
@@ -531,4 +502,3 @@ const styles = {
     lineHeight: "1.45",
   },
 };
-

@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { doc, getDoc } from "firebase/firestore";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { doc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, db } from "../firebase";
 
 export default function TranscriptPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const clientId = searchParams.get("clientId") || "";
+  const sessionId = searchParams.get("sessionId") || "";
 
   const [uid, setUid] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -14,11 +18,11 @@ export default function TranscriptPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [rawTranscript, setRawTranscript] = useState(""); // stored as string on the session doc
-  const [summaryText, setSummaryText] = useState(""); // optional, if present
+  const [rawTranscript, setRawTranscript] = useState("");
+  const [summaryText, setSummaryText] = useState("");
 
-  const clientId = useMemo(() => localStorage.getItem("selectedClientId"), []);
-  const sessionId = useMemo(() => localStorage.getItem("selectedSessionId"), []);
+  const [transcriptStatus, setTranscriptStatus] = useState(""); // queued | processing | done | error
+  const [summaryStatus, setSummaryStatus] = useState(""); // queued | processing | done | error
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -29,20 +33,22 @@ export default function TranscriptPage() {
     return () => unsub();
   }, [navigate]);
 
-  // Minimal “not diarised” reformat:
-  // - Accepts a transcript that is just a big blob of text
-  // - Splits into readable paragraphs
-  // - Optionally tries to split by speaker labels if they exist (e.g. "Therapist:" "Client:")
+  const statusLine = useMemo(() => {
+    if (!clientId || !sessionId) return "Missing client/session in URL.";
+    const t = transcriptStatus ? `Transcript: ${transcriptStatus}` : "Transcript: —";
+    const s = summaryStatus ? `Summary: ${summaryStatus}` : "Summary: —";
+    return `${t} · ${s}`;
+  }, [clientId, sessionId, transcriptStatus, summaryStatus]);
+
+  // Formatting (unchanged idea, just uses rawTranscript)
   const formattedBlocks = useMemo(() => {
     const t = (rawTranscript || "").trim();
     if (!t) return [];
 
-    // If it looks diarised already (has "Client:" or "Therapist:"), split by those labels.
     const hasSpeakerLabels =
       /(^|\n)\s*(therapist|client|counsellor|counselor)\s*:/i.test(t);
 
     if (hasSpeakerLabels) {
-      // Split while keeping labels
       const parts = t
         .replace(/\r\n/g, "\n")
         .split(/\n(?=\s*(therapist|client|counsellor|counselor)\s*:)/i)
@@ -57,8 +63,6 @@ export default function TranscriptPage() {
       });
     }
 
-    // Otherwise: not diarised → split into paragraphs by sentence-ish chunking.
-    // Strategy: split on double newlines first; if none, chunk by ~2–3 sentences.
     const normalised = t.replace(/\r\n/g, "\n");
 
     const paras = normalised
@@ -70,7 +74,6 @@ export default function TranscriptPage() {
       return paras.map((text, idx) => ({ key: `p-${idx}`, speaker: "", text }));
     }
 
-    // No paragraph breaks: chunk by sentences into readable blocks
     const sentences = normalised
       .replace(/\s+/g, " ")
       .split(/(?<=[.!?])\s+/)
@@ -91,31 +94,24 @@ export default function TranscriptPage() {
     return blocks.map((text, idx) => ({ key: `c-${idx}`, speaker: "", text }));
   }, [rawTranscript]);
 
+  // Live subscribe to the session doc
   useEffect(() => {
-    const run = async () => {
-      if (!authReady || !uid) return;
+    if (!authReady || !uid) return;
 
-      if (!clientId || !sessionId) {
-        setError("No session selected. Please open a session from the client profile.");
-        setLoading(false);
-        return;
-      }
+    if (!clientId || !sessionId) {
+      setError("Missing client/session in the URL. Open transcript from the chat.");
+      setLoading(false);
+      return;
+    }
 
-      setError("");
-      setLoading(true);
+    setError("");
+    setLoading(true);
 
-      try {
-        const sessionRef = doc(
-          db,
-          "users",
-          uid,
-          "clients",
-          clientId,
-          "sessions",
-          sessionId
-        );
+    const sessionRef = doc(db, "users", uid, "clients", clientId, "sessions", sessionId);
 
-        const snap = await getDoc(sessionRef);
+    const unsub = onSnapshot(
+      sessionRef,
+      (snap) => {
         if (!snap.exists()) {
           setError("Session not found.");
           setLoading(false);
@@ -123,18 +119,30 @@ export default function TranscriptPage() {
         }
 
         const data = snap.data() || {};
-        setRawTranscript(data.transcript || "");
+
+        // correct field names (your functions write Transcript)
+        setRawTranscript(data.Transcript || "");
         setSummaryText(data.summaryText || "");
-      } catch (e) {
+
+        setTranscriptStatus(data.transcriptStatus || "");
+        setSummaryStatus(data.summaryStatus || "");
+
+        setLoading(false);
+      },
+      (e) => {
         console.error(e);
         setError("Could not load transcript. Please try again.");
-      } finally {
         setLoading(false);
       }
-    };
+    );
 
-    run();
+    return () => unsub();
   }, [authReady, uid, clientId, sessionId]);
+
+  const goChat = () => {
+    if (!clientId || !sessionId) return;
+    navigate(`/chatAI?clientId=${clientId}&sessionId=${sessionId}`);
+  };
 
   return (
     <div style={styles.page}>
@@ -145,17 +153,24 @@ export default function TranscriptPage() {
               type="button"
               style={styles.backButton}
               onClick={() => navigate(-1)}
-              aria-label="Back to chat"
+              aria-label="Back"
             >
               ← Back
             </button>
 
             <div style={styles.headerText}>
               <div style={styles.headerTitle}>Transcript</div>
-              <div style={styles.headerSub}>
-                {loading ? "Loading…" : "Session transcript"}
-              </div>
+              <div style={styles.headerSub}>{loading ? "Loading…" : statusLine}</div>
             </div>
+
+            <button
+              type="button"
+              style={styles.chatButton}
+              onClick={goChat}
+              disabled={!clientId || !sessionId}
+            >
+              Chat
+            </button>
           </div>
 
           {error ? <div style={styles.errorBox}>{error}</div> : null}
@@ -165,7 +180,20 @@ export default function TranscriptPage() {
               <div style={styles.summaryTitle}>AI summary</div>
               <div style={styles.summaryText}>{summaryText}</div>
             </div>
-          ) : null}
+          ) : (
+            <div style={styles.summaryPendingBox}>
+              <div style={styles.summaryTitle}>AI summary</div>
+              <div style={styles.summaryPendingText}>
+                {summaryStatus === "processing"
+                  ? "Summarising…"
+                  : summaryStatus === "error"
+                  ? "Summary failed. Check function logs."
+                  : rawTranscript.trim()
+                  ? "Queued. This will appear once summarisation completes."
+                  : "Waiting for transcript…"}
+              </div>
+            </div>
+          )}
 
           <div style={styles.transcriptWindow}>
             {loading ? (
@@ -174,7 +202,11 @@ export default function TranscriptPage() {
               <div style={styles.emptyState}>
                 <p style={styles.emptyTitle}>No transcript yet</p>
                 <p style={styles.emptyText}>
-                  Record or upload a session to generate a transcript.
+                  {transcriptStatus === "processing"
+                    ? "Transcribing… please wait."
+                    : transcriptStatus === "error"
+                    ? "Transcription failed. Check function logs."
+                    : "Record or upload a session to generate a transcript."}
                 </p>
               </div>
             ) : formattedBlocks.length === 0 ? (
@@ -195,8 +227,8 @@ export default function TranscriptPage() {
         </div>
 
         <p style={styles.disclaimer}>
-          This transcript is stored as raw text for now. We’re formatting it into readable
-          blocks. Proper diarisation (speaker separation) can be added later.
+          This transcript updates live as processing completes. Proper diarisation (speaker
+          separation) can be added later.
         </p>
       </div>
     </div>
@@ -252,6 +284,7 @@ const styles = {
   },
   headerText: {
     minWidth: 0,
+    flex: "1 1 auto",
   },
   headerTitle: {
     fontSize: "16px",
@@ -263,6 +296,23 @@ const styles = {
     fontSize: "13px",
     color: "#6b7280",
     marginTop: "2px",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+
+  chatButton: {
+    border: "1px solid #e5e7eb",
+    background: "#ffffff",
+    color: "#111827",
+    borderRadius: "10px",
+    padding: "10px 12px",
+    fontSize: "13px",
+    fontWeight: 800,
+    cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.03)",
+    whiteSpace: "nowrap",
+    flex: "0 0 auto",
   },
 
   errorBox: {
@@ -283,6 +333,13 @@ const styles = {
     padding: "14px",
     marginBottom: "12px",
   },
+  summaryPendingBox: {
+    border: "1px dashed #d1d5db",
+    background: "#fafafa",
+    borderRadius: "12px",
+    padding: "14px",
+    marginBottom: "12px",
+  },
   summaryTitle: {
     fontSize: "13px",
     fontWeight: 900,
@@ -294,6 +351,11 @@ const styles = {
     color: "#374151",
     lineHeight: 1.55,
     whiteSpace: "pre-wrap",
+  },
+  summaryPendingText: {
+    fontSize: "13px",
+    color: "#6b7280",
+    lineHeight: 1.45,
   },
 
   transcriptWindow: {

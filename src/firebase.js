@@ -1,24 +1,19 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-// Optional:
-import { getAnalytics } from "firebase/analytics";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDy0tqXTsjX25Ab3_p63lDijMcoTpyzSI8",
-  authDomain: "brighter-day-ca46f.firebaseapp.com",
-  projectId: "brighter-day-ca46f",
-  storageBucket: "brighter-day-ca46f.firebasestorage.app",
-  messagingSenderId: "170384405635",
-  appId: "1:170384405635:web:b1005fe5cee23aececd7b6",
-  measurementId: "G-B7TG0L353N"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = initializeApp(firebaseConfig);
 
-// ✅ ADD THESE:
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-
-// Optional (safe to keep)
-export const analytics = getAnalytics(app);
+export const storage = getStorage(app);

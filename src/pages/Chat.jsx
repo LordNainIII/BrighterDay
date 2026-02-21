@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   addDoc,
   collection,
@@ -14,6 +14,10 @@ import { auth, db } from "../firebase";
 
 export default function Chat() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const clientId = searchParams.get("clientId") || "";
+  const sessionId = searchParams.get("sessionId") || "";
 
   const [uid, setUid] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -26,12 +30,7 @@ export default function Chat() {
 
   const listRef = useRef(null);
 
-  const clientId = useMemo(() => localStorage.getItem("selectedClientId"), []);
-  const sessionId = useMemo(() => localStorage.getItem("selectedSessionId"), []);
-
-  const sessionLabel = useMemo(() => {
-    return "Session";
-  }, []);
+  const sessionLabel = useMemo(() => "Session", []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -61,12 +60,12 @@ export default function Chat() {
     return "";
   };
 
-  // ✅ Load messages from Firestore
+  // Load messages from Firestore
   useEffect(() => {
     if (!authReady || !uid) return;
 
     if (!clientId || !sessionId) {
-      setError("No session selected. Please open a session from the client profile.");
+      setError("Missing client/session in the URL. Please open a session from the client profile.");
       setLoadingMessages(false);
       return;
     }
@@ -106,7 +105,7 @@ export default function Chat() {
               id: "m1",
               role: "assistant",
               text:
-                "Hi — this is the session chat. Ask questions about this session (summary, themes, risk flags, next steps).",
+                "Hi — this is the session chat. Once your transcript and summary are ready, you can ask questions here.",
               ts: "Now",
             },
           ]);
@@ -119,9 +118,7 @@ export default function Chat() {
       },
       (err) => {
         console.error(err);
-        setError(
-          "Could not load messages. Ensure each message has a createdAt field (timestamp)."
-        );
+        setError("Could not load messages. Ensure each message has a createdAt field (timestamp).");
         setLoadingMessages(false);
       }
     );
@@ -129,13 +126,13 @@ export default function Chat() {
     return () => unsub();
   }, [authReady, uid, clientId, sessionId]);
 
-  // ✅ Send writes to Firestore (user message + placeholder assistant reply)
+  // Send writes to Firestore (user message + placeholder assistant reply)
   const send = async () => {
     const text = input.trim();
     if (!text || !uid || sending) return;
 
     if (!clientId || !sessionId) {
-      setError("No session selected.");
+      setError("Missing client/session in the URL.");
       return;
     }
 
@@ -163,8 +160,7 @@ export default function Chat() {
 
       await addDoc(messagesRef, {
         role: "assistant",
-        content:
-          "Got it. (Placeholder response) Later this will use AI + transcript context.",
+        content: "Got it. (Placeholder) Soon this will answer using the transcript + summary.",
         createdAt: serverTimestamp(),
       });
 
@@ -172,7 +168,6 @@ export default function Chat() {
     } catch (err) {
       console.error(err);
       setError("Failed to send message. Please try again.");
-      // Restore text so the user doesn't lose it
       setInput(text);
     } finally {
       setSending(false);
@@ -201,7 +196,8 @@ export default function Chat() {
             <button
               type="button"
               style={styles.transcriptButton}
-              onClick={() => navigate("/transcript")}
+              onClick={() => navigate(`/transcript?clientId=${clientId}&sessionId=${sessionId}`)}
+              disabled={!clientId || !sessionId}
             >
               Transcript
             </button>
