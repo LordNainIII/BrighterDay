@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { collection, onSnapshot, orderBy, query as fsQuery } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import BurgerMenu from "../components/BurgerMenu";
 
 import BrighterDay from "../assets/BrighterDay.png";
 import { auth, db } from "../firebase";
@@ -70,6 +71,7 @@ export default function ClientListPage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
+        <BurgerMenu />
         <img src={BrighterDay} alt="Brighter Day" style={styles.logo} />
 
         <div style={styles.card}>

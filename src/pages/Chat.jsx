@@ -11,6 +11,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, db } from "../firebase";
+import BurgerMenu from "../components/BurgerMenu";
 
 export default function Chat() {
   const navigate = useNavigate();
@@ -182,7 +183,7 @@ export default function Chat() {
             <button
               type="button"
               style={styles.backButton}
-              onClick={() => navigate("/clientprofile")}
+              onClick={() => navigate(`/clientprofile/${clientId}`)}
               aria-label="Back"
             >
               ← Back

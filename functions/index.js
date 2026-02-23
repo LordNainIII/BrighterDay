@@ -4,6 +4,7 @@ const os = require("os");
 const fs = require("fs");
 
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 
 const OpenAI = require("openai").default;
@@ -12,6 +13,10 @@ admin.initializeApp();
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 
+/**
+ * Expected storage path format:
+ * users/{uid}/clients/{clientId}/sessions/{anything}
+ */
 function parseSessionPath(objectName) {
   const parts = objectName.split("/");
 
@@ -26,6 +31,7 @@ function parseSessionPath(objectName) {
   };
 }
 
+// ✅ Trigger: when audio is uploaded, transcribe & write to Firestore session doc
 exports.transcribeSessionAudio = onObjectFinalized(
   {
     region: "europe-west2",
@@ -53,6 +59,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
       .doc(clientId)
       .collection("sessions");
 
+    // Find session doc by storagePath match
     const snap = await sessionsCol
       .where("storagePath", "==", objectName)
       .limit(1)
@@ -95,6 +102,35 @@ exports.transcribeSessionAudio = onObjectFinalized(
       try {
         fs.unlinkSync(tmpFile);
       } catch {}
+    }
+  }
+);
+
+// Callable: delete Firestore user tree + Storage files + Auth user
+exports.deleteAccountAndData = onCall(
+  { region: "europe-west2" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError("unauthenticated", "You must be signed in.");
+    }
+
+    try {
+      // 1) Firestore: delete users/{uid} including subcollections
+      const userRef = admin.firestore().doc(`users/${uid}`);
+      await admin.firestore().recursiveDelete(userRef);
+
+      // 2) Storage: delete all objects under users/{uid}/...
+      const bucket = admin.storage().bucket();
+      await bucket.deleteFiles({ prefix: `users/${uid}/` });
+
+      // 3) Auth: delete user
+      await admin.auth().deleteUser(uid);
+
+      return { ok: true };
+    } catch (err) {
+      console.error("deleteAccountAndData failed:", err);
+      throw new HttpsError("internal", "Failed to delete account and data.");
     }
   }
 );

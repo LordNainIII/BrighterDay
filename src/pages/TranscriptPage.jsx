@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { doc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import BurgerMenu from "../components/BurgerMenu";
 
 import { auth, db } from "../firebase";
 
@@ -147,6 +148,7 @@ export default function TranscriptPage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
+        <BurgerMenu />
         <div style={styles.card}>
           <div style={styles.headerRow}>
             <button

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
+import BurgerMenu from "../components/BurgerMenu";
 
 export default function NewClientPage() {
   const navigate = useNavigate();
@@ -81,6 +82,7 @@ export default function NewClientPage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
+        <BurgerMenu />
         <div style={styles.card}>
           <h1 style={styles.title}>New client</h1>
           <p style={styles.subtitle}>Add a client contact record.</p>

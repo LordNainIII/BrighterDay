@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import BurgerMenu from "../components/BurgerMenu";
 
 import { auth, db } from "../firebase";
 
@@ -145,6 +146,7 @@ export default function ClientProfilePage() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
+        <BurgerMenu />
         <div style={styles.card}>
           <div style={styles.headerRow}>
             <button

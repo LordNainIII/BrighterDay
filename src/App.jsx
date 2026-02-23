@@ -1,6 +1,5 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 
-import ChatPage from "./pages/ChatPage.jsx";
 import RegistrationPage from "./pages/RegistrationPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 
@@ -10,6 +9,9 @@ import ClientProfile from "./pages/ClientProfile.jsx";
 import RecordSessionPage from "./pages/RecordSessionPage.jsx";
 import Chat from "./pages/Chat.jsx";
 import TranscriptPage from "./pages/TranscriptPage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
+
+/* import ChatPage from "./pages/ChatPage.jsx"; */  
 
 export default function App() {
   return (
@@ -20,9 +22,9 @@ export default function App() {
       <Route path="/register" element={<RegistrationPage />} />
 
       {/* Existing routes */}
-      <Route path="/chat" element={<ChatPage />} />
       <Route path="/newclient" element={<NewClientPage />} />
       <Route path="/clientlist" element={<ClientListPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
 
       {/* URL-driven client profile */}
       <Route path="/clientprofile/:clientId" element={<ClientProfile />} />
@@ -34,6 +36,11 @@ export default function App() {
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
+
+      {/* Archived */}
+      {/* <Route path="/chat" element={<ChatPage />} /> */}
+      {/* <Route path="/chat" element={<ChatPage />} /> */}
+
     </Routes>
   );
 }
