@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
@@ -143,10 +143,13 @@ export default function ClientProfilePage() {
     navigate(`/record?clientId=${clientId}`);
   };
 
+  const clientSummary = client?.summary || "";
+
   return (
     <div style={styles.page}>
       <div style={styles.container}>
         <BurgerMenu />
+
         <div style={styles.card}>
           <div style={styles.headerRow}>
             <button
@@ -181,14 +184,19 @@ export default function ClientProfilePage() {
               <div style={styles.summaryBox}>
                 <div style={styles.sectionHeaderRow}>
                   <h2 style={styles.sectionTitle}>Summary</h2>
-                  <span style={styles.sectionHint}>AI-generated (coming soon)</span>
+                  <span style={styles.sectionHint}>
+                    {hasText(clientSummary) ? "AI-generated" : "AI-generated (to be generated)"}
+                  </span>
                 </div>
 
-                <p style={styles.summaryText}>
-                  This is a placeholder for the client’s AI summary. It will eventually highlight
-                  key themes, progress over time, and relevant clinical signals to explore — written
-                  in calm, professional prose.
-                </p>
+                {hasText(clientSummary) ? (
+                  <p style={styles.summaryText}>{clientSummary}</p>
+                ) : (
+                  <p style={styles.summaryText}>
+                    No summary yet. Once a session transcript is completed, Brighter Day will generate
+                    an AI summary here.
+                  </p>
+                )}
               </div>
 
               <div style={styles.sessionsHeaderRow}>
@@ -409,6 +417,7 @@ const styles = {
     fontSize: "14px",
     color: "#374151",
     lineHeight: 1.55,
+    whiteSpace: "pre-wrap",
   },
 
   sessionsHeaderRow: {

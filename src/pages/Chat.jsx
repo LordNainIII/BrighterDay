@@ -61,12 +61,13 @@ export default function Chat() {
     return "";
   };
 
-  // Load messages from Firestore
   useEffect(() => {
     if (!authReady || !uid) return;
 
     if (!clientId || !sessionId) {
-      setError("Missing client/session in the URL. Please open a session from the client profile.");
+      setError(
+        "Missing client/session in the URL. Please open a session from the client profile."
+      );
       setLoadingMessages(false);
       return;
     }
@@ -95,31 +96,21 @@ export default function Chat() {
           return {
             id: d.id,
             role: data.role === "user" ? "user" : "assistant",
+            kind: data.kind || "",
             text: data.content || "",
             ts: formatTime(data.createdAt),
           };
         });
 
-        if (rows.length === 0) {
-          setMessages([
-            {
-              id: "m1",
-              role: "assistant",
-              text:
-                "Hi — this is the session chat. Once your transcript and summary are ready, you can ask questions here.",
-              ts: "Now",
-            },
-          ]);
-        } else {
-          setMessages(rows);
-        }
-
+        setMessages(rows);
         setLoadingMessages(false);
         setTimeout(scrollToBottom, 0);
       },
       (err) => {
         console.error(err);
-        setError("Could not load messages. Ensure each message has a createdAt field (timestamp).");
+        setError(
+          "Could not load messages. Ensure each message has a createdAt field (timestamp)."
+        );
         setLoadingMessages(false);
       }
     );
@@ -127,7 +118,6 @@ export default function Chat() {
     return () => unsub();
   }, [authReady, uid, clientId, sessionId]);
 
-  // Send writes to Firestore (user message + placeholder assistant reply)
   const send = async () => {
     const text = input.trim();
     if (!text || !uid || sending) return;
@@ -159,9 +149,11 @@ export default function Chat() {
         createdAt: serverTimestamp(),
       });
 
+      // Placeholder assistant reply for now (later: function / API call)
       await addDoc(messagesRef, {
         role: "assistant",
-        content: "Got it. (Placeholder) Soon this will answer using the transcript + summary.",
+        content:
+          "Got it. (Placeholder) Soon this will answer using the transcript + summary.",
         createdAt: serverTimestamp(),
       });
 
@@ -175,8 +167,21 @@ export default function Chat() {
     }
   };
 
+  const waitingBubble = (
+    <div style={{ ...styles.messageRow, ...styles.messageRowAssistant }}>
+      <div style={{ ...styles.bubble, ...styles.bubbleAssistant }}>
+        <div style={styles.bubbleText}>
+          Waiting for your transcript and AI summary… Once it appears, ask questions here.
+        </div>
+        <div style={styles.bubbleMeta}>Now</div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={styles.page}>
+      <BurgerMenu />
+
       <div style={styles.container}>
         <div style={styles.card}>
           <div style={styles.headerRow}>
@@ -197,7 +202,9 @@ export default function Chat() {
             <button
               type="button"
               style={styles.transcriptButton}
-              onClick={() => navigate(`/transcript?clientId=${clientId}&sessionId=${sessionId}`)}
+              onClick={() =>
+                navigate(`/transcript?clientId=${clientId}&sessionId=${sessionId}`)
+              }
               disabled={!clientId || !sessionId}
             >
               Transcript
@@ -209,6 +216,8 @@ export default function Chat() {
           <div style={styles.chatWindow} ref={listRef}>
             {loadingMessages ? (
               <div style={styles.loadingHint}>Loading messages…</div>
+            ) : messages.length === 0 ? (
+              waitingBubble
             ) : (
               messages.map((m) => (
                 <div
@@ -228,6 +237,10 @@ export default function Chat() {
                         : styles.bubbleAssistant),
                     }}
                   >
+                    {m.kind === "summary" ? (
+                      <div style={styles.summaryPill}>AI summary</div>
+                    ) : null}
+
                     <div style={styles.bubbleText}>{m.text}</div>
                     <div style={styles.bubbleMeta}>{m.ts}</div>
                   </div>
@@ -262,8 +275,8 @@ export default function Chat() {
         </div>
 
         <p style={styles.disclaimer}>
-          This chat is a workspace tool. It will be connected to the selected
-          session’s transcript and summaries later.
+          This chat is a workspace tool. It uses the selected session’s transcript and AI
+          summary as context.
         </p>
       </div>
     </div>
@@ -403,6 +416,18 @@ const styles = {
     background: "#ffffff",
     color: "#111827",
   },
+
+  summaryPill: {
+    display: "inline-block",
+    padding: "4px 8px",
+    borderRadius: "999px",
+    fontSize: "12px",
+    fontWeight: 900,
+    background: "#f3f4f6",
+    border: "1px solid #e5e7eb",
+    marginBottom: "8px",
+  },
+
   bubbleText: {
     fontSize: "14px",
     lineHeight: 1.45,
