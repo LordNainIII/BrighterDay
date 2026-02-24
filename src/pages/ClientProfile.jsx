@@ -143,6 +143,7 @@ export default function ClientProfilePage() {
     navigate(`/record?clientId=${clientId}`);
   };
 
+  // IMPORTANT: this must match what the Cloud Function writes to the client doc
   const clientSummary = client?.summary || "";
 
   return (
@@ -237,7 +238,9 @@ export default function ClientProfilePage() {
                         </span>
                         <span style={styles.dot}>•</span>
                         <span style={styles.metaItem}>
-                          {hasText(s.Transcript) ? "Transcript available" : "No transcript yet"}
+                          {hasText(s.Transcript || s.transcript)
+                            ? "Transcript available"
+                            : "No transcript yet"}
                         </span>
                       </div>
                     </button>

@@ -15,7 +15,6 @@ admin.initializeApp();
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const OPENAI_VECTOR_STORE_ID = defineSecret("OPENAI_VECTOR_STORE_ID");
 
-
 function parseSessionPath(objectName) {
   const parts = objectName.split("/");
 
@@ -77,7 +76,6 @@ async function generateSummary({ openai, transcript, vectorStoreId }) {
 /* Create the “first assistant message” (the summary) only if the messages collection is empty. */
 async function ensureSummaryAsFirstChatMessage({ sessionRef, summaryText }) {
   const messagesCol = sessionRef.collection("messages");
-
   const existing = await messagesCol.limit(1).get();
   if (!existing.empty) return;
 
@@ -153,8 +151,8 @@ exports.transcribeSessionAudio = onObjectFinalized(
       }
 
       await sessionRef.update({
-        transcript: transcriptText,        
-        Transcript: transcriptText,        
+        transcript: transcriptText,
+        Transcript: transcriptText,
         transcriptStatus: "done",
         transcriptCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -200,7 +198,6 @@ exports.transcribeSessionAudio = onObjectFinalized(
     } catch (err) {
       const msg = String(err?.message || err);
 
-      // Best-effort status writes (don’t throw if these fail)
       try {
         await sessionRef.update({
           transcriptStatus: "error",
@@ -220,14 +217,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
   }
 );
 
-/**
- * Callable: delete account + delete Firestore user data + delete Storage files.
- *
- * IMPORTANT:
- * - Password re-entry should be handled on the client by reauthenticating
- *   (e.g., reauthenticateWithCredential). This function assumes the caller is
- *   already authenticated (context.auth present).
- */
+
 exports.deleteAccountAndData = onCall(
   {
     region: "europe-west2",
@@ -245,7 +235,6 @@ exports.deleteAccountAndData = onCall(
     const userDocRef = db.collection("users").doc(uid);
 
     try {
-      // recursiveDelete is available in the Admin SDK (recommended)
       await db.recursiveDelete(userDocRef);
     } catch (e) {
       console.error("recursiveDelete failed:", e);
@@ -257,7 +246,6 @@ exports.deleteAccountAndData = onCall(
       const [files] = await bucket.getFiles({ prefix: `users/${uid}/` });
       await Promise.all(files.map((f) => f.delete().catch(() => null)));
     } catch (e) {
-      // Not fatal, but log it
       console.error("Storage delete failed:", e);
     }
 
@@ -268,6 +256,126 @@ exports.deleteAccountAndData = onCall(
       console.error("Auth delete failed:", e);
       throw new HttpsError("internal", "Failed to delete Auth user.");
     }
+
+    return { ok: true };
+  }
+);
+
+// -------------------- Chat (callable) --------------------
+
+function chatSystemPrompt() {
+  return [
+    "You are assisting a qualified therapist.",
+    "Answer the user’s question about the client/session using the transcript and summary as your primary source.",
+    "Use the Merck Manuals via file search only for factual clinical context when relevant.",
+    "",
+    "Formatting and Style Rules:",
+    "Write in clear, professional prose only. Do not use headings, bullet points, numbering, markdown, emojis, or stylistic formatting of any kind. Do not label sections.",
+    "Provide responses as a concise, coherent narrative rather than lists or structured sections.",
+    "If the transcript appears fragmented, unclear, or potentially inaccurate, briefly note how this may limit interpretation. Otherwise, do not comment on transcription quality.",
+    "",
+    "Rules:",
+    "- Do NOT diagnose or imply diagnostic certainty.",
+    "- Use cautious, neutral clinical language.",
+    "- If you use Merck context, include exactly one short excerpt (max 20 words).",
+    "- If no relevant Merck reference is found, say: 'No relevant Merck reference found.'",
+  ].join("\n");
+}
+
+async function generateAnswer({ openai, transcript, summaryText, question, vectorStoreId }) {
+  const context = [
+    "SESSION SUMMARY:",
+    summaryText || "(none)",
+    "",
+    "SESSION TRANSCRIPT:",
+    transcript,
+  ].join("\n");
+
+  const resp = await openai.responses.create({
+    model: "gpt-4o-mini",
+    tools: [
+      {
+        type: "file_search",
+        vector_store_ids: [vectorStoreId],
+      },
+    ],
+    input: [
+      { role: "system", content: chatSystemPrompt() },
+      { role: "user", content: context },
+      { role: "user", content: question },
+    ],
+  });
+
+  const out = (resp.output_text || "").trim();
+  if (!out) throw new Error("OpenAI returned an empty answer.");
+  return out;
+}
+
+exports.chatWithMerck = onCall(
+  {
+    region: "europe-west2",
+    memory: "1GiB",
+    timeoutSeconds: 60,
+    secrets: [OPENAI_API_KEY, OPENAI_VECTOR_STORE_ID],
+  },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "You must be logged in.");
+
+    const { clientId, sessionId, text } = request.data || {};
+    if (!hasText(clientId) || !hasText(sessionId) || !hasText(text)) {
+      throw new HttpsError("invalid-argument", "Missing clientId, sessionId, or text.");
+    }
+
+    const vectorStoreId = OPENAI_VECTOR_STORE_ID.value();
+    if (!hasText(vectorStoreId)) {
+      throw new HttpsError("failed-precondition", "Missing OPENAI_VECTOR_STORE_ID.");
+    }
+
+    const db = admin.firestore();
+
+    const sessionRef = db
+      .collection("users")
+      .doc(uid)
+      .collection("clients")
+      .doc(clientId)
+      .collection("sessions")
+      .doc(sessionId);
+
+    const snap = await sessionRef.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Session not found.");
+
+    const session = snap.data() || {};
+    const transcript = session.Transcript || session.transcript || "";
+    const summaryText = session.summaryText || "";
+
+    if (!hasText(transcript)) {
+      throw new HttpsError("failed-precondition", "Transcript not ready yet.");
+    }
+
+    const openai = new OpenAI({ apiKey: OPENAI_API_KEY.value() });
+
+    // Write user message first (so the chat feels instant once listener updates)
+    const messagesCol = sessionRef.collection("messages");
+    await messagesCol.add({
+      role: "user",
+      content: text,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const answer = await generateAnswer({
+      openai,
+      transcript,
+      summaryText,
+      question: text,
+      vectorStoreId,
+    });
+
+    await messagesCol.add({
+      role: "assistant",
+      content: answer,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
     return { ok: true };
   }

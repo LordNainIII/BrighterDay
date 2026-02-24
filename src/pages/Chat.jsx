@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  addDoc,
   collection,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "../firebase";
+import { auth, db, functions } from "../firebase";
 import BurgerMenu from "../components/BurgerMenu";
 
 export default function Chat() {
@@ -61,6 +60,7 @@ export default function Chat() {
     return "";
   };
 
+  // Load messages from Firestore
   useEffect(() => {
     if (!authReady || !uid) return;
 
@@ -118,6 +118,7 @@ export default function Chat() {
     return () => unsub();
   }, [authReady, uid, clientId, sessionId]);
 
+  // Send -> calls Cloud Function which writes user + assistant messages
   const send = async () => {
     const text = input.trim();
     if (!text || !uid || sending) return;
@@ -132,35 +133,13 @@ export default function Chat() {
     setSending(true);
 
     try {
-      const messagesRef = collection(
-        db,
-        "users",
-        uid,
-        "clients",
-        clientId,
-        "sessions",
-        sessionId,
-        "messages"
-      );
-
-      await addDoc(messagesRef, {
-        role: "user",
-        content: text,
-        createdAt: serverTimestamp(),
-      });
-
-      // Placeholder assistant reply for now (later: function / API call)
-      await addDoc(messagesRef, {
-        role: "assistant",
-        content:
-          "Got it. (Placeholder) Soon this will answer using the transcript + summary.",
-        createdAt: serverTimestamp(),
-      });
+      const fn = httpsCallable(functions, "chatWithMerck");
+      await fn({ clientId, sessionId, text });
 
       setTimeout(scrollToBottom, 0);
     } catch (err) {
       console.error(err);
-      setError("Failed to send message. Please try again.");
+      setError(err?.message || "Failed to send message. Please try again.");
       setInput(text);
     } finally {
       setSending(false);
@@ -232,9 +211,7 @@ export default function Chat() {
                   <div
                     style={{
                       ...styles.bubble,
-                      ...(m.role === "user"
-                        ? styles.bubbleUser
-                        : styles.bubbleAssistant),
+                      ...(m.role === "user" ? styles.bubbleUser : styles.bubbleAssistant),
                     }}
                   >
                     {m.kind === "summary" ? (
@@ -275,8 +252,8 @@ export default function Chat() {
         </div>
 
         <p style={styles.disclaimer}>
-          This chat is a workspace tool. It uses the selected session’s transcript and AI
-          summary as context.
+          This chat answers using the selected session’s transcript and Merck Manuals file search. 
+          AI-generated responses may be inaccurate or incomplete and must not replace or supplement clinical expertise or professional judgement.
         </p>
       </div>
     </div>
