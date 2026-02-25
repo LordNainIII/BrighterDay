@@ -194,8 +194,24 @@ export default function RecordSessionPage() {
       <div style={styles.card}>
         {isRecording && (
           <div style={styles.recordingRow}>
-            <img src={RecordingIcon} alt="" style={styles.recordingIcon} />
+            <img
+              src={RecordingIcon}
+              alt=""
+              style={{
+                ...styles.recordingIcon,
+                animation: "pulseRec 1.2s ease-in-out infinite",
+              }}
+            />
             <span style={styles.recordingText}>Recording...</span>
+
+            {/* local keyframes (no CSS file needed) */}
+            <style>{`
+              @keyframes pulseRec {
+                0%   { transform: scale(1); opacity: 0.75; }
+                50%  { transform: scale(1.12); opacity: 1; }
+                100% { transform: scale(1); opacity: 0.75; }
+              }
+            `}</style>
           </div>
         )}
 
