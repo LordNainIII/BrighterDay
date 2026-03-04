@@ -43,8 +43,11 @@ export default function NewClientPage() {
   };
 
   const handleCreateClient = async () => {
+    console.log("Create client requested.");
+
     const msg = validate();
     if (msg) {
+      console.log("Create client blocked by validation.");
       setError(msg);
       return;
     }
@@ -54,10 +57,14 @@ export default function NewClientPage() {
 
     try {
       const user = auth.currentUser;
+
       if (!user) {
+        console.log("Create client failed: user not authenticated.");
         setError("You must be signed in to create a client.");
         return;
       }
+
+      console.log("Creating client document in Firestore...");
 
       const clientsRef = collection(db, "users", user.uid, "clients");
 
@@ -70,9 +77,13 @@ export default function NewClientPage() {
         summary: "",
       });
 
-      // Simple for now: go back to list (or profile later)
+      console.log("Client document created successfully.");
+      console.log("Client ID:", docRef.id);
+
       navigate("/clientlist", { state: { createdClientId: docRef.id } });
+
     } catch (e) {
+      console.log("Create client failed.");
       setError("Could not create client. Please try again.");
     } finally {
       setLoading(false);
@@ -83,6 +94,7 @@ export default function NewClientPage() {
     <div style={styles.page}>
       <div style={styles.container}>
         <BurgerMenu />
+
         <div style={styles.card}>
           <h1 style={styles.title}>New client</h1>
           <p style={styles.subtitle}>Add a client contact record.</p>
@@ -161,7 +173,10 @@ export default function NewClientPage() {
             <button
               type="button"
               style={styles.linkButton}
-              onClick={() => navigate(-1)}
+              onClick={() => {
+                console.log("Returning to previous page.");
+                navigate(-1);
+              }}
               disabled={loading}
             >
               Back

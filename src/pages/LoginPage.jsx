@@ -20,34 +20,49 @@ export default function LoginPage() {
   };
 
   const handleLogin = async () => {
-    const msg = validate();
-    if (msg) {
-      setError(msg);
-      return;
+
+  console.log("User attempting login.");
+
+  const msg = validate();
+  if (msg) {
+    setError(msg);
+    console.log("Login blocked by validation.");
+    return;
+  }
+
+  setError("");
+  setLoading(true);
+
+  try {
+
+    console.log("Signing in with Firebase Auth...");
+
+    await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
+
+    console.log("Login successful.");
+
+    navigate("/clientlist");
+
+  } catch (e) {
+
+    console.log("Login failed.");
+
+    const code = e?.code || "";
+
+    if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
+      setError("Incorrect email or password.");
+    } else if (code === "auth/user-not-found") {
+      setError("No account found for that email.");
+    } else if (code === "auth/too-many-requests") {
+      setError("Too many attempts. Please wait a moment and try again.");
+    } else {
+      setError("Login failed. Please try again.");
     }
 
-    setError("");
-    setLoading(true);
-
-    try {
-      await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-      navigate("/clientlist");
-    } catch (e) {
-      const code = e?.code || "";
-
-      if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
-        setError("Incorrect email or password.");
-      } else if (code === "auth/user-not-found") {
-        setError("No account found for that email.");
-      } else if (code === "auth/too-many-requests") {
-        setError("Too many attempts. Please wait a moment and try again.");
-      } else {
-        setError("Login failed. Please try again.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div style={styles.page}>

@@ -61,133 +61,159 @@ export default function RecordSessionPage() {
   };
 
   const startRecording = async () => {
-    if (micDisabled) return;
-    setError("");
+  console.log("User pressed record.");   
 
-    const user = auth.currentUser;
-    if (!user) {
-      setError("You must be signed in to record a session.");
-      return;
-    }
-    if (!clientId) {
-      setError("Missing client id. Open /record?clientId=XYZ (or /record/XYZ).");
-      return;
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Audio recording is not supported in this browser.");
-      return;
-    }
+  if (micDisabled) return;
+  setError("");
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
+  const user = auth.currentUser;
+  if (!user) {
+    setError("You must be signed in to record a session.");
+    return;
+  }
+  if (!clientId) {
+    setError("Missing client id. Open /record?clientId=XYZ (or /record/XYZ).");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setError("Audio recording is not supported in this browser.");
+    return;
+  }
 
-      const mimeType = pickBestMimeType();
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-      };
+    console.log("Microphone access granted.");   
 
-      recorder.onerror = () => {
-        setError("Recording error. Please try again.");
-        stopTracks();
-        setIsRecording(false);
-      };
+    mediaStreamRef.current = stream;
 
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-    } catch (e) {
-      setError(
-        e?.name === "NotAllowedError"
-          ? "Microphone permission was denied."
-          : "Could not access microphone. Please try again."
-      );
-    }
-  };
+    const mimeType = pickBestMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+    chunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
+
+    recorder.onerror = () => {
+      setError("Recording error. Please try again.");
+      stopTracks();
+      setIsRecording(false);
+    };
+
+    recorder.start();
+
+    console.log("Recording started successfully.");   
+
+    mediaRecorderRef.current = recorder;
+    setIsRecording(true);
+
+  } catch (e) {
+    setError(
+      e?.name === "NotAllowedError"
+        ? "Microphone permission was denied."
+        : "Could not access microphone. Please try again."
+    );
+  }
+};
 
   const endSession = async () => {
-    if (endDisabled) return;
-    setError("");
 
-    const user = auth.currentUser;
-    if (!user) {
-      setError("You must be signed in to upload a recording.");
-      return;
-    }
+  console.log("User ended recording. Processing audio...");
 
-    setIsUploading(true);
+  if (endDisabled) return;
+  setError("");
 
-    try {
-      const recorder = mediaRecorderRef.current;
+  const user = auth.currentUser;
+  if (!user) {
+    setError("You must be signed in to upload a recording.");
+    return;
+  }
 
-      // Stop recorder and wait for final data flush
-      const blob = await new Promise((resolve, reject) => {
-        if (!recorder) return reject(new Error("No active recorder."));
+  setIsUploading(true);
 
-        recorder.onstop = () => {
-          try {
-            const type = recorder.mimeType || "audio/webm";
-            resolve(new Blob(chunksRef.current, { type }));
-          } catch (err) {
-            reject(err);
-          }
-        };
+  try {
+    const recorder = mediaRecorderRef.current;
 
+    console.log("Stopping recorder and preparing audio file...");
+
+    // Stop recorder and wait for final data flush
+    const blob = await new Promise((resolve, reject) => {
+      if (!recorder) return reject(new Error("No active recorder."));
+
+      recorder.onstop = () => {
         try {
-          recorder.stop();
+          const type = recorder.mimeType || "audio/webm";
+          resolve(new Blob(chunksRef.current, { type }));
         } catch (err) {
           reject(err);
         }
-      });
+      };
 
-      stopTracks();
-      setIsRecording(false);
+      try {
+        recorder.stop();
+      } catch (err) {
+        reject(err);
+      }
+    });
 
-      const ext =
-        blob.type.includes("mp4") ? "m4a" : blob.type.includes("webm") ? "webm" : "webm";
+    console.log("Audio file created from recording.");
 
-      const createdAtMs = Date.now();
-      const storagePath = `users/${user.uid}/clients/${clientId}/sessions/${createdAtMs}.${ext}`;
-      const storageRef = ref(storage, storagePath);
+    stopTracks();
+    setIsRecording(false);
 
-      // Upload audio
-      await uploadBytes(storageRef, blob, {
-        contentType: blob.type || "audio/webm",
-      });
+    const ext =
+      blob.type.includes("mp4") ? "m4a" : blob.type.includes("webm") ? "webm" : "webm";
 
-      const downloadUrl = await getDownloadURL(storageRef);
+    const createdAtMs = Date.now();
+    const storagePath = `users/${user.uid}/clients/${clientId}/sessions/${createdAtMs}.${ext}`;
+    const storageRef = ref(storage, storagePath);
 
-      // Create session doc
-      const sessionsCol = collection(db, "users", user.uid, "clients", clientId, "sessions");
+    console.log("Uploading audio to Firebase Storage...");
 
-      const docRef = await addDoc(sessionsCol, {
-        type: "audio",
-        status: "uploaded",
-        storagePath,
-        downloadUrl,
-        contentType: blob.type || "audio/webm",
-        createdAt: serverTimestamp(),
+    // Upload audio
+    await uploadBytes(storageRef, blob, {
+      contentType: blob.type || "audio/webm",
+    });
 
-        // pipeline status fields (your functions will update these)
-        transcriptStatus: "queued",
-        summaryStatus: "queued",
-      });
+    console.log("Audio uploaded successfully.");
 
-      // URL-driven state (no localStorage)
-      navigate(`/chatAI?clientId=${clientId}&sessionId=${docRef.id}`);
-    } catch (e) {
-      setError("Upload failed. Please try again.");
-      stopTracks();
-      setIsRecording(false);
-    } finally {
-      mediaRecorderRef.current = null;
-      chunksRef.current = [];
-      setIsUploading(false);
-    }
-  };
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    console.log("Download URL retrieved.");
+
+    // Create session doc
+    const sessionsCol = collection(db, "users", user.uid, "clients", clientId, "sessions");
+
+    const docRef = await addDoc(sessionsCol, {
+      type: "audio",
+      status: "uploaded",
+      storagePath,
+      downloadUrl,
+      contentType: blob.type || "audio/webm",
+      createdAt: serverTimestamp(),
+
+      // pipeline status fields (your functions will update these)
+      transcriptStatus: "queued",
+      summaryStatus: "queued",
+    });
+
+    console.log("Session document created. Transcription pipeline should now start.");
+
+    // URL-driven state (no localStorage)
+    navigate(`/chatAI?clientId=${clientId}&sessionId=${docRef.id}`);
+
+  } catch (e) {
+    console.error("Upload failed.", e);
+    setError("Upload failed. Please try again.");
+    stopTracks();
+    setIsRecording(false);
+  } finally {
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+    setIsUploading(false);
+  }
+};
 
   return (
     <div style={styles.page}>

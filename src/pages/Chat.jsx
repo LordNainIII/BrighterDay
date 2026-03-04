@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-} from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 
@@ -33,11 +28,18 @@ export default function Chat() {
   const sessionLabel = useMemo(() => "Session", []);
 
   useEffect(() => {
+    console.log("Chat page opened.");
+
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid || null);
       setAuthReady(true);
-      if (!user) navigate("/", { replace: true });
+
+      if (!user) {
+        console.log("Chat blocked: not signed in. Redirecting to login.");
+        navigate("/", { replace: true });
+      }
     });
+
     return () => unsub();
   }, [navigate]);
 
@@ -65,15 +67,16 @@ export default function Chat() {
     if (!authReady || !uid) return;
 
     if (!clientId || !sessionId) {
-      setError(
-        "Missing client/session in the URL. Please open a session from the client profile."
-      );
+      setError("Missing client/session in the URL. Please open a session from the client profile.");
       setLoadingMessages(false);
+      console.log("Chat cannot start: missing clientId or sessionId in URL.");
       return;
     }
 
     setError("");
     setLoadingMessages(true);
+
+    console.log("Listening for chat messages...");
 
     const messagesRef = collection(
       db,
@@ -91,6 +94,8 @@ export default function Chat() {
     const unsub = onSnapshot(
       qy,
       (snap) => {
+        console.log("Chat messages received from Firestore.");
+
         const rows = snap.docs.map((d) => {
           const data = d.data() || {};
           return {
@@ -108,14 +113,16 @@ export default function Chat() {
       },
       (err) => {
         console.error(err);
-        setError(
-          "Could not load messages. Ensure each message has a createdAt field (timestamp)."
-        );
+        setError("Could not load messages. Ensure each message has a createdAt field (timestamp).");
         setLoadingMessages(false);
+        console.log("Chat failed to load messages.");
       }
     );
 
-    return () => unsub();
+    return () => {
+      console.log("Stopped listening for chat messages.");
+      unsub();
+    };
   }, [authReady, uid, clientId, sessionId]);
 
   // Send -> calls Cloud Function which writes user + assistant messages
@@ -125,6 +132,7 @@ export default function Chat() {
 
     if (!clientId || !sessionId) {
       setError("Missing client/session in the URL.");
+      console.log("chatWithMerck() not called: missing clientId or sessionId.");
       return;
     }
 
@@ -133,12 +141,18 @@ export default function Chat() {
     setSending(true);
 
     try {
+      console.log("Calling chatWithMerck()...");
+
       const fn = httpsCallable(functions, "chatWithMerck");
       await fn({ clientId, sessionId, text });
+
+      console.log("chatWithMerck() completed successfully.");
 
       setTimeout(scrollToBottom, 0);
     } catch (err) {
       console.error(err);
+      console.log("chatWithMerck() failed.");
+
       setError(err?.message || "Failed to send message. Please try again.");
       setInput(text);
     } finally {
@@ -181,9 +195,7 @@ export default function Chat() {
             <button
               type="button"
               style={styles.transcriptButton}
-              onClick={() =>
-                navigate(`/transcript?clientId=${clientId}&sessionId=${sessionId}`)
-              }
+              onClick={() => navigate(`/transcript?clientId=${clientId}&sessionId=${sessionId}`)}
               disabled={!clientId || !sessionId}
             >
               Transcript
@@ -203,9 +215,7 @@ export default function Chat() {
                   key={m.id}
                   style={{
                     ...styles.messageRow,
-                    ...(m.role === "user"
-                      ? styles.messageRowUser
-                      : styles.messageRowAssistant),
+                    ...(m.role === "user" ? styles.messageRowUser : styles.messageRowAssistant),
                   }}
                 >
                   <div
@@ -214,9 +224,7 @@ export default function Chat() {
                       ...(m.role === "user" ? styles.bubbleUser : styles.bubbleAssistant),
                     }}
                   >
-                    {m.kind === "summary" ? (
-                      <div style={styles.summaryPill}>AI summary</div>
-                    ) : null}
+                    {m.kind === "summary" ? <div style={styles.summaryPill}>AI summary</div> : null}
 
                     <div style={styles.bubbleText}>{m.text}</div>
                     <div style={styles.bubbleMeta}>{m.ts}</div>
@@ -252,14 +260,14 @@ export default function Chat() {
         </div>
 
         <p style={styles.disclaimer}>
-          This chat answers using the selected session’s transcript and Merck Manuals file search. 
-          AI-generated responses may be inaccurate or incomplete and must not replace or supplement clinical expertise or professional judgement.
+          This chat answers using the selected session’s transcript and Merck Manuals file search.
+          AI-generated responses may be inaccurate or incomplete and must not replace or supplement
+          clinical expertise or professional judgement.
         </p>
       </div>
     </div>
   );
 }
-
 const styles = {
   page: {
     minHeight: "100vh",

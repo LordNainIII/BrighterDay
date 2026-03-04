@@ -96,6 +96,9 @@ exports.transcribeSessionAudio = onObjectFinalized(
     secrets: [OPENAI_API_KEY, OPENAI_VECTOR_STORE_ID],
   },
   async (event) => {
+
+    console.log("Audio file detected. Starting transcription pipeline.");
+
     const object = event.data;
     const bucketName = object.bucket;
     const objectName = object.name;
@@ -103,7 +106,10 @@ exports.transcribeSessionAudio = onObjectFinalized(
     if (!objectName) return;
 
     const parsed = parseSessionPath(objectName);
-    if (!parsed) return;
+    if (!parsed) {
+      console.log("File path not recognised as a session upload.");
+      return;
+    }
 
     const { uid, clientId } = parsed;
 
@@ -118,9 +124,15 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
     // Find session doc by storagePath
     const snap = await sessionsCol.where("storagePath", "==", objectName).limit(1).get();
-    if (snap.empty) return;
+
+    if (snap.empty) {
+      console.log("No matching session document found for uploaded audio.");
+      return;
+    }
 
     const sessionRef = snap.docs[0].ref;
+
+    console.log("Session document located. Beginning transcription.");
 
     // Mark processing
     await sessionRef.update({
@@ -133,7 +145,11 @@ exports.transcribeSessionAudio = onObjectFinalized(
     const tmpFile = path.join(os.tmpdir(), path.basename(objectName));
 
     try {
+      console.log("Downloading audio file from storage...");
+
       await bucket.file(objectName).download({ destination: tmpFile });
+
+      console.log("Audio file downloaded. Sending to Whisper for transcription.");
 
       const openai = new OpenAI({
         apiKey: OPENAI_API_KEY.value(),
@@ -146,9 +162,12 @@ exports.transcribeSessionAudio = onObjectFinalized(
       });
 
       const transcriptText = (transcription?.text || "").trim();
+
       if (!transcriptText) {
         throw new Error("Transcription returned empty text.");
       }
+
+      console.log("Transcription complete.");
 
       await sessionRef.update({
         transcript: transcriptText,
@@ -158,7 +177,9 @@ exports.transcribeSessionAudio = onObjectFinalized(
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // ---- 2) Summarise with file_search ----
+      console.log("Transcript saved to Firestore.");
+
+      // ---- 2) Summarise ----
       const vectorStoreId = OPENAI_VECTOR_STORE_ID.value();
       if (!hasText(vectorStoreId)) {
         throw new Error("Missing OPENAI_VECTOR_STORE_ID secret value.");
@@ -169,13 +190,17 @@ exports.transcribeSessionAudio = onObjectFinalized(
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
+      console.log("Generating AI summary...");
+
       const summaryText = await generateSummary({
         openai,
         transcript: transcriptText,
         vectorStoreId,
       });
 
-      // Save to session
+      console.log("AI summary generated.");
+
+      // Save summary
       await sessionRef.update({
         summaryText,
         summaryStatus: "done",
@@ -183,11 +208,16 @@ exports.transcribeSessionAudio = onObjectFinalized(
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // Add summary as the first chat message (if chat is empty)
+      console.log("Summary saved to Firestore.");
+
+      // Add summary as first chat message
       await ensureSummaryAsFirstChatMessage({ sessionRef, summaryText });
 
-      // Update client “Summary” panel with latest session summary
+      console.log("Summary added as first chat message.");
+
+      // Update client summary
       const clientRef = db.collection("users").doc(uid).collection("clients").doc(clientId);
+
       await clientRef.set(
         {
           summary: summaryText,
@@ -195,8 +225,14 @@ exports.transcribeSessionAudio = onObjectFinalized(
         },
         { merge: true }
       );
+
+      console.log("Client profile summary updated.");
+
     } catch (err) {
+
       const msg = String(err?.message || err);
+
+      console.error("Transcription pipeline failed.", msg);
 
       try {
         await sessionRef.update({
@@ -208,11 +244,13 @@ exports.transcribeSessionAudio = onObjectFinalized(
         });
       } catch {}
 
-      console.error("transcribeSessionAudio failed:", err);
     } finally {
+
       try {
         fs.unlinkSync(tmpFile);
       } catch {}
+
+      console.log("Temporary file cleaned up.");
     }
   }
 );
@@ -223,40 +261,55 @@ exports.deleteAccountAndData = onCall(
     region: "europe-west2",
   },
   async (request) => {
+    console.log("Delete account request received.");
+
     const uid = request.auth?.uid;
     if (!uid) {
+      console.log("Delete blocked: user not authenticated.");
       throw new HttpsError("unauthenticated", "You must be logged in to delete your account.");
     }
 
     const db = admin.firestore();
     const bucket = admin.storage().bucket();
 
+    console.log("Starting deletion for user.");
+
     // 1) Delete Firestore: users/{uid} and all nested subcollections
     const userDocRef = db.collection("users").doc(uid);
 
     try {
+      console.log("Deleting Firestore user data...");
       await db.recursiveDelete(userDocRef);
+      console.log("Firestore user data deleted.");
     } catch (e) {
-      console.error("recursiveDelete failed:", e);
+      console.error("Firestore deletion failed.");
+      console.error(e);
       throw new HttpsError("internal", "Failed to delete Firestore user data.");
     }
 
     // 2) Delete Storage files under users/{uid}/...
     try {
+      console.log("Deleting Storage files...");
       const [files] = await bucket.getFiles({ prefix: `users/${uid}/` });
       await Promise.all(files.map((f) => f.delete().catch(() => null)));
+      console.log("Storage files deleted.");
     } catch (e) {
-      console.error("Storage delete failed:", e);
+      console.error("Storage delete failed.");
+      console.error(e);
     }
 
     // 3) Delete Auth user
     try {
+      console.log("Deleting Auth user...");
       await admin.auth().deleteUser(uid);
+      console.log("Auth user deleted.");
     } catch (e) {
-      console.error("Auth delete failed:", e);
+      console.error("Auth delete failed.");
+      console.error(e);
       throw new HttpsError("internal", "Failed to delete Auth user.");
     }
 
+    console.log("Account deletion complete.");
     return { ok: true };
   }
 );
@@ -319,16 +372,23 @@ exports.chatWithMerck = onCall(
     secrets: [OPENAI_API_KEY, OPENAI_VECTOR_STORE_ID],
   },
   async (request) => {
+    console.log("Chat request received.");
+
     const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "You must be logged in.");
+    if (!uid) {
+      console.log("Chat blocked: user not authenticated.");
+      throw new HttpsError("unauthenticated", "You must be logged in.");
+    }
 
     const { clientId, sessionId, text } = request.data || {};
     if (!hasText(clientId) || !hasText(sessionId) || !hasText(text)) {
+      console.log("Chat blocked: missing clientId/sessionId/text.");
       throw new HttpsError("invalid-argument", "Missing clientId, sessionId, or text.");
     }
 
     const vectorStoreId = OPENAI_VECTOR_STORE_ID.value();
     if (!hasText(vectorStoreId)) {
+      console.log("Chat blocked: missing vector store id.");
       throw new HttpsError("failed-precondition", "Missing OPENAI_VECTOR_STORE_ID.");
     }
 
@@ -342,26 +402,36 @@ exports.chatWithMerck = onCall(
       .collection("sessions")
       .doc(sessionId);
 
+    console.log("Loading session document...");
+
     const snap = await sessionRef.get();
-    if (!snap.exists) throw new HttpsError("not-found", "Session not found.");
+    if (!snap.exists) {
+      console.log("Chat failed: session not found.");
+      throw new HttpsError("not-found", "Session not found.");
+    }
 
     const session = snap.data() || {};
     const transcript = session.Transcript || session.transcript || "";
     const summaryText = session.summaryText || "";
 
     if (!hasText(transcript)) {
+      console.log("Chat blocked: transcript not ready yet.");
       throw new HttpsError("failed-precondition", "Transcript not ready yet.");
     }
 
+    console.log("Transcript found. Writing user message...");
+
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY.value() });
 
-    // Write user message first (so the chat feels instant once listener updates)
+    // Write user message first
     const messagesCol = sessionRef.collection("messages");
     await messagesCol.add({
       role: "user",
       content: text,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    console.log("User message saved. Generating AI response...");
 
     const answer = await generateAnswer({
       openai,
@@ -371,11 +441,15 @@ exports.chatWithMerck = onCall(
       vectorStoreId,
     });
 
+    console.log("AI response generated. Saving assistant message...");
+
     await messagesCol.add({
       role: "assistant",
       content: answer,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    console.log("Assistant message saved. Chat complete.");
 
     return { ok: true };
   }

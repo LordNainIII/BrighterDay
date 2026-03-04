@@ -17,11 +17,20 @@ export default function ClientListPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    console.log("ClientList page opened.");
+
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid || null);
       setAuthReady(true);
-      if (!user) navigate("/", { replace: true });
+
+      if (!user) {
+        console.log("ClientList blocked: user not authenticated. Redirecting.");
+        navigate("/", { replace: true });
+      } else {
+        console.log("User authenticated. Loading clients.");
+      }
     });
+
     return () => unsub();
   }, [navigate]);
 
@@ -30,19 +39,29 @@ export default function ClientListPage() {
 
     setError("");
 
+    console.log("Listening for client list in Firestore...");
+
     const clientsRef = collection(db, "users", uid, "clients");
     const q = fsQuery(clientsRef, orderBy("createdAt", "desc"));
 
     const unsub = onSnapshot(
       q,
       (snap) => {
+        console.log("Client list received from Firestore.");
+
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setClients(rows);
       },
-      () => setError("Could not load clients. Please refresh and try again.")
+      () => {
+        console.log("Failed to load client list.");
+        setError("Could not load clients. Please refresh and try again.");
+      }
     );
 
-    return () => unsub();
+    return () => {
+      console.log("Stopped listening for client list.");
+      unsub();
+    };
   }, [authReady, uid]);
 
   const filtered = useMemo(() => {
@@ -64,7 +83,7 @@ export default function ClientListPage() {
   };
 
   const openClient = (clientId) => {
-    // new route
+    console.log("Opening client profile:", clientId);
     navigate(`/clientprofile/${clientId}`);
   };
 
@@ -84,7 +103,10 @@ export default function ClientListPage() {
             <button
               type="button"
               style={styles.primarySmallButton}
-              onClick={() => navigate("/newclient")}
+              onClick={() => {
+                console.log("Navigating to new client page.");
+                navigate("/newclient");
+              }}
             >
               + New
             </button>
@@ -109,7 +131,10 @@ export default function ClientListPage() {
                 <button
                   type="button"
                   style={styles.button}
-                  onClick={() => navigate("/newclient")}
+                  onClick={() => {
+                    console.log("Navigating to create new client.");
+                    navigate("/newclient");
+                  }}
                 >
                   Create client
                 </button>

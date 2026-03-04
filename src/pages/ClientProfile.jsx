@@ -22,11 +22,20 @@ export default function ClientProfilePage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    console.log("ClientProfile page opened.");
+
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid || null);
       setAuthReady(true);
-      if (!user) navigate("/", { replace: true });
+
+      if (!user) {
+        console.log("ClientProfile blocked: user not authenticated. Redirecting.");
+        navigate("/", { replace: true });
+      } else {
+        console.log("User authenticated. Loading client profile.");
+      }
     });
+
     return () => unsub();
   }, [navigate]);
 
@@ -35,6 +44,7 @@ export default function ClientProfilePage() {
     if (!authReady || !uid) return;
 
     if (!clientId) {
+      console.log("ClientProfile failed: missing clientId in route.");
       setError("Missing client id in the route. Please open a client from the list.");
       setLoadingClient(false);
       setLoadingSessions(false);
@@ -43,6 +53,8 @@ export default function ClientProfilePage() {
 
     (async () => {
       try {
+        console.log("Loading client document...");
+
         setError("");
         setLoadingClient(true);
 
@@ -50,13 +62,16 @@ export default function ClientProfilePage() {
         const snap = await getDoc(ref);
 
         if (!snap.exists()) {
+          console.log("Client document not found.");
           setError("Client not found. It may have been deleted.");
           setClient(null);
           return;
         }
 
+        console.log("Client document loaded successfully.");
         setClient({ id: snap.id, ...snap.data() });
       } catch {
+        console.log("Failed to load client document.");
         setError("Could not load client profile. Please try again.");
       } finally {
         setLoadingClient(false);
@@ -68,6 +83,8 @@ export default function ClientProfilePage() {
   useEffect(() => {
     if (!authReady || !uid || !clientId) return;
 
+    console.log("Listening for sessions...");
+
     setLoadingSessions(true);
 
     const sessionsRef = collection(db, "users", uid, "clients", clientId, "sessions");
@@ -75,6 +92,8 @@ export default function ClientProfilePage() {
     const unsub = onSnapshot(
       sessionsRef,
       (snap) => {
+        console.log("Sessions received from Firestore.");
+
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
         // newest first
@@ -89,12 +108,16 @@ export default function ClientProfilePage() {
         setLoadingSessions(false);
       },
       () => {
+        console.log("Failed to load sessions.");
         setError("Could not load sessions. Please refresh and try again.");
         setLoadingSessions(false);
       }
     );
 
-    return () => unsub();
+    return () => {
+      console.log("Stopped listening for sessions.");
+      unsub();
+    };
   }, [authReady, uid, clientId]);
 
   const initials = (firstName, lastName) => {
@@ -136,10 +159,12 @@ export default function ClientProfilePage() {
   };
 
   const openSession = (sessionId) => {
+    console.log("Opening session chat:", sessionId);
     navigate(`/chatAI?clientId=${clientId}&sessionId=${sessionId}`);
   };
 
   const goRecord = () => {
+    console.log("Navigating to record new session.");
     navigate(`/record?clientId=${clientId}`);
   };
 
@@ -156,7 +181,10 @@ export default function ClientProfilePage() {
             <button
               type="button"
               style={styles.backButton}
-              onClick={() => navigate("/clientlist")}
+              onClick={() => {
+                console.log("Returning to client list.");
+                navigate("/clientlist");
+              }}
               aria-label="Back to clients"
             >
               ← Clients
