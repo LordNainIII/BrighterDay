@@ -323,7 +323,7 @@ function chatSystemPrompt() {
     "Use the Merck Manuals via file search only for factual clinical context when relevant.",
     "",
     "Formatting and Style Rules:",
-    "Write in clear, professional prose only. Do not use headings, bullet points, numbering, markdown, emojis, or stylistic formatting of any kind. Do not label sections.",
+    "Write in clear, professional prose only. Do not use headings, bullet points, hashtags, numbering, markdown, emojis, asterisks or stylistic formatting of any kind. Do not label sections.",
     "Provide responses as a concise, coherent narrative rather than lists or structured sections.",
     "If the transcript appears fragmented, unclear, or potentially inaccurate, briefly note how this may limit interpretation. Otherwise, do not comment on transcription quality.",
     "",
