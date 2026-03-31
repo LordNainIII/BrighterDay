@@ -2,6 +2,10 @@ const admin = require("firebase-admin");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
+const fsp = require("fs/promises");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
+const ffmpegPath = require("ffmpeg-static");
 
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -9,11 +13,18 @@ const { defineSecret } = require("firebase-functions/params");
 
 const OpenAI = require("openai").default;
 
+const execFileAsync = promisify(execFile);
+
 admin.initializeApp();
 
 // Secrets (must exist in Secret Manager)
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const OPENAI_VECTOR_STORE_ID = defineSecret("OPENAI_VECTOR_STORE_ID");
+
+const MAX_TRANSCRIPTION_FILE_BYTES = 24 * 1024 * 1024; // keep below 25MB API limit
+const CHUNK_SECONDS = 10 * 60; // 10 minutes
+const SUMMARY_TRANSCRIPT_CHAR_LIMIT = 120000;
+const CHAT_TRANSCRIPT_CHAR_LIMIT = 120000;
 
 function parseSessionPath(objectName) {
   const parts = objectName.split("/");
@@ -32,6 +43,187 @@ function parseSessionPath(objectName) {
 
 function hasText(v) {
   return typeof v === "string" && v.trim().length > 0;
+}
+
+function ensureDir(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function fileSizeBytes(filePath) {
+  return fs.statSync(filePath).size;
+}
+
+function safeFileStem(name) {
+  return String(name || "file").replace(/[^\w.-]/g, "_");
+}
+
+async function runFfmpeg(args) {
+  if (!ffmpegPath) {
+    throw new Error("ffmpeg-static not found. Install it with: npm install ffmpeg-static");
+  }
+
+  await execFileAsync(ffmpegPath, args);
+}
+
+async function compressForSpeech(inputPath, outputPath) {
+  await runFfmpeg([
+    "-y",
+    "-i",
+    inputPath,
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "libmp3lame",
+    "-b:a",
+    "32k",
+    outputPath,
+  ]);
+}
+
+async function splitAudioIntoChunks(inputPath, outputPattern) {
+  await runFfmpeg([
+    "-y",
+    "-i",
+    inputPath,
+    "-f",
+    "segment",
+    "-segment_time",
+    String(CHUNK_SECONDS),
+    "-reset_timestamps",
+    "1",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "libmp3lame",
+    "-b:a",
+    "32k",
+    outputPattern,
+  ]);
+}
+
+async function listFilesMatching(dirPath, prefix, suffix) {
+  const names = await fsp.readdir(dirPath);
+  return names
+    .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
+    .sort()
+    .map((name) => path.join(dirPath, name));
+}
+
+function truncateWithHeadTail(text, limit, marker) {
+  if (!hasText(text)) return "";
+  if (text.length <= limit) return text;
+
+  const headLen = Math.floor(limit * 0.6);
+  const tailLen = Math.floor(limit * 0.4);
+
+  return [
+    text.slice(0, headLen),
+    "",
+    marker,
+    "",
+    text.slice(text.length - tailLen),
+  ].join("\n");
+}
+
+function maybeTruncateForSummary(text) {
+  return truncateWithHeadTail(
+    text,
+    SUMMARY_TRANSCRIPT_CHAR_LIMIT,
+    "[Transcript truncated for summary context due to length.]"
+  );
+}
+
+function maybeTruncateForChat(text) {
+  return truncateWithHeadTail(
+    text,
+    CHAT_TRANSCRIPT_CHAR_LIMIT,
+    "[Transcript truncated for chat context due to length.]"
+  );
+}
+
+async function transcribeSingleFile({ openai, filePath }) {
+  const transcription = await openai.audio.transcriptions.create({
+    file: fs.createReadStream(filePath),
+    model: "whisper-1",
+  });
+
+  return (transcription?.text || "").trim();
+}
+
+async function transcribeAudioRobust({ openai, sourcePath }) {
+  const workingDir = path.join(os.tmpdir(), `audio-work-${Date.now()}`);
+  ensureDir(workingDir);
+
+  const compressedPath = path.join(workingDir, "speech-optimised.mp3");
+
+  await compressForSpeech(sourcePath, compressedPath);
+
+  const compressedSize = fileSizeBytes(compressedPath);
+  console.log(`Compressed audio size: ${compressedSize} bytes`);
+
+  if (compressedSize <= MAX_TRANSCRIPTION_FILE_BYTES) {
+    const text = await transcribeSingleFile({
+      openai,
+      filePath: compressedPath,
+    });
+
+    return {
+      transcriptText: text,
+      mode: "single",
+      chunkCount: 1,
+    };
+  }
+
+  console.log("Compressed file still too large. Splitting into chunks...");
+
+  const chunkPattern = path.join(workingDir, "chunk-%03d.mp3");
+  await splitAudioIntoChunks(compressedPath, chunkPattern);
+
+  const chunkPaths = await listFilesMatching(workingDir, "chunk-", ".mp3");
+  if (!chunkPaths.length) {
+    throw new Error("FFmpeg chunking produced no output files.");
+  }
+
+  const parts = [];
+
+  for (let i = 0; i < chunkPaths.length; i += 1) {
+    const chunkPath = chunkPaths[i];
+    const size = fileSizeBytes(chunkPath);
+    console.log(`Transcribing chunk ${i + 1}/${chunkPaths.length} (${size} bytes)`);
+
+    if (size > MAX_TRANSCRIPTION_FILE_BYTES) {
+      throw new Error(`Chunk ${i + 1} is still too large after processing (${size} bytes).`);
+    }
+
+    const text = await transcribeSingleFile({
+      openai,
+      filePath: chunkPath,
+    });
+
+    parts.push({
+      index: i,
+      content: text,
+    });
+  }
+
+  const transcriptText = parts
+    .map((p) => p.content)
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    transcriptText,
+    mode: "chunked",
+    chunkCount: parts.length,
+    parts,
+  };
 }
 
 /* Generate an AI summary using Responses + file_search against your Vector Store. */
@@ -54,6 +246,8 @@ async function generateSummary({ openai, transcript, vectorStoreId }) {
     "If the transcript appears fragmented, unclear, or potentially inaccurate, briefly note how this may limit interpretation. Otherwise, do not comment on transcription quality.",
   ].join("\n");
 
+  const summaryTranscript = maybeTruncateForSummary(transcript);
+
   const resp = await openai.responses.create({
     model: "gpt-4o-mini",
     tools: [
@@ -64,13 +258,31 @@ async function generateSummary({ openai, transcript, vectorStoreId }) {
     ],
     input: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: transcript },
+      { role: "user", content: summaryTranscript },
     ],
   });
 
   const out = (resp.output_text || "").trim();
   if (!out) throw new Error("OpenAI returned an empty summary.");
   return out;
+}
+
+async function saveTranscriptParts({ sessionRef, parts }) {
+  if (!Array.isArray(parts) || !parts.length) return;
+
+  const batch = admin.firestore().batch();
+  const partsCol = sessionRef.collection("transcriptParts");
+
+  parts.forEach((part) => {
+    const docRef = partsCol.doc(String(part.index).padStart(3, "0"));
+    batch.set(docRef, {
+      index: part.index,
+      content: part.content || "",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  });
+
+  await batch.commit();
 }
 
 /* Create the “first assistant message” (the summary) only if the messages collection is empty. */
@@ -91,19 +303,24 @@ async function ensureSummaryAsFirstChatMessage({ sessionRef, summaryText }) {
 exports.transcribeSessionAudio = onObjectFinalized(
   {
     region: "europe-west2",
-    memory: "1GiB",
+    memory: "2GiB",
     timeoutSeconds: 540,
     secrets: [OPENAI_API_KEY, OPENAI_VECTOR_STORE_ID],
   },
   async (event) => {
-
     console.log("Audio file detected. Starting transcription pipeline.");
 
     const object = event.data;
     const bucketName = object.bucket;
     const objectName = object.name;
+    const contentType = object.contentType || "";
 
     if (!objectName) return;
+
+    if (!contentType.startsWith("audio/") && !contentType.startsWith("video/")) {
+      console.log("Uploaded file is not audio/video. Ignoring.");
+      return;
+    }
 
     const parsed = parseSessionPath(objectName);
     if (!parsed) {
@@ -134,48 +351,63 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
     console.log("Session document located. Beginning transcription.");
 
-    // Mark processing
     await sessionRef.update({
       transcriptStatus: "processing",
       summaryStatus: "pending",
+      transcriptError: admin.firestore.FieldValue.delete(),
+      summaryError: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     const bucket = admin.storage().bucket(bucketName);
-    const tmpFile = path.join(os.tmpdir(), path.basename(objectName));
+    const sourceExt = path.extname(objectName) || ".bin";
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `source-${Date.now()}-${safeFileStem(path.basename(objectName, sourceExt))}${sourceExt}`
+    );
 
     try {
       console.log("Downloading audio file from storage...");
-
       await bucket.file(objectName).download({ destination: tmpFile });
-
-      console.log("Audio file downloaded. Sending to Whisper for transcription.");
 
       const openai = new OpenAI({
         apiKey: OPENAI_API_KEY.value(),
       });
 
-      // ---- 1) Transcribe ----
-      const transcription = await openai.audio.transcriptions.create({
-        file: fs.createReadStream(tmpFile),
-        model: "whisper-1",
+      console.log("Audio file downloaded. Preparing for robust transcription.");
+
+      // ---- 1) Transcribe (compress + chunk if needed) ----
+      const transcriptionResult = await transcribeAudioRobust({
+        openai,
+        sourcePath: tmpFile,
       });
 
-      const transcriptText = (transcription?.text || "").trim();
+      const transcriptText = (transcriptionResult?.transcriptText || "").trim();
 
       if (!transcriptText) {
         throw new Error("Transcription returned empty text.");
       }
 
-      console.log("Transcription complete.");
+      console.log(
+        `Transcription complete. Mode: ${transcriptionResult.mode}. Chunks: ${transcriptionResult.chunkCount}.`
+      );
 
       await sessionRef.update({
         transcript: transcriptText,
-        Transcript: transcriptText,
         transcriptStatus: "done",
         transcriptCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+        transcriptMode: transcriptionResult.mode,
+        transcriptChunkCount: transcriptionResult.chunkCount || 1,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+
+      if (Array.isArray(transcriptionResult.parts) && transcriptionResult.parts.length) {
+        console.log("Saving transcript parts...");
+        await saveTranscriptParts({
+          sessionRef,
+          parts: transcriptionResult.parts,
+        });
+      }
 
       console.log("Transcript saved to Firestore.");
 
@@ -200,7 +432,6 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
       console.log("AI summary generated.");
 
-      // Save summary
       await sessionRef.update({
         summaryText,
         summaryStatus: "done",
@@ -210,12 +441,10 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
       console.log("Summary saved to Firestore.");
 
-      // Add summary as first chat message
       await ensureSummaryAsFirstChatMessage({ sessionRef, summaryText });
 
       console.log("Summary added as first chat message.");
 
-      // Update client summary
       const clientRef = db.collection("users").doc(uid).collection("clients").doc(clientId);
 
       await clientRef.set(
@@ -227,9 +456,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
       );
 
       console.log("Client profile summary updated.");
-
     } catch (err) {
-
       const msg = String(err?.message || err);
 
       console.error("Transcription pipeline failed.", msg);
@@ -243,9 +470,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       } catch {}
-
     } finally {
-
       try {
         fs.unlinkSync(tmpFile);
       } catch {}
@@ -254,7 +479,6 @@ exports.transcribeSessionAudio = onObjectFinalized(
     }
   }
 );
-
 
 exports.deleteAccountAndData = onCall(
   {
@@ -341,7 +565,7 @@ async function generateAnswer({ openai, transcript, summaryText, question, vecto
     summaryText || "(none)",
     "",
     "SESSION TRANSCRIPT:",
-    transcript,
+    maybeTruncateForChat(transcript),
   ].join("\n");
 
   const resp = await openai.responses.create({
@@ -411,7 +635,7 @@ exports.chatWithMerck = onCall(
     }
 
     const session = snap.data() || {};
-    const transcript = session.Transcript || session.transcript || "";
+    const transcript = session.transcript || "";
     const summaryText = session.summaryText || "";
 
     if (!hasText(transcript)) {
@@ -451,6 +675,6 @@ exports.chatWithMerck = onCall(
 
     console.log("Assistant message saved. Chat complete.");
 
-    return { ok: true };
+    return { ok: true, answer };
   }
 );

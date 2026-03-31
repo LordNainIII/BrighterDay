@@ -6,7 +6,7 @@ import RecordingIcon from "../assets/Recording-Icon.png";
 
 import { auth, db, storage } from "../firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 
 function pickBestMimeType() {
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
@@ -14,6 +14,15 @@ function pickBestMimeType() {
     if (window.MediaRecorder && MediaRecorder.isTypeSupported?.(t)) return t;
   }
   return "";
+}
+
+function getExtensionFromType(type = "") {
+  if (type.includes("mp4") || type.includes("m4a")) return "m4a";
+  if (type.includes("mpeg") || type.includes("mp3")) return "mp3";
+  if (type.includes("wav")) return "wav";
+  if (type.includes("ogg")) return "ogg";
+  if (type.includes("webm")) return "webm";
+  return "webm";
 }
 
 export default function RecordSessionPage() {
@@ -31,9 +40,11 @@ export default function RecordSessionPage() {
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const chunksRef = useRef([]);
+  const fileInputRef = useRef(null);
 
   const endDisabled = !isRecording || isUploading;
   const micDisabled = isRecording || isUploading;
+  const uploadTestDisabled = isRecording || isUploading;
 
   const endButtonStyle = useMemo(
     () => ({
@@ -53,6 +64,14 @@ export default function RecordSessionPage() {
     [isRecording, isMicPressed, micDisabled]
   );
 
+  const testUploadLinkStyle = useMemo(
+    () => ({
+      ...styles.testUploadLink,
+      ...(uploadTestDisabled ? styles.testUploadLinkDisabled : null),
+    }),
+    [uploadTestDisabled]
+  );
+
   const stopTracks = () => {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -60,164 +79,213 @@ export default function RecordSessionPage() {
     }
   };
 
-  const startRecording = async () => {
-  console.log("User pressed record.");   
+  const goBackToClientProfile = () => {
+    if (!clientId) {
+      navigate(-1);
+      return;
+    }
+    navigate(`/clientprofile/${clientId}`);
+  };
 
-  if (micDisabled) return;
-  setError("");
+  const createQueuedSessionAndUpload = async ({ fileOrBlob, contentType }) => {
+    const user = auth.currentUser;
+    if (!user) {
+      throw new Error("You must be signed in to upload a recording.");
+    }
+    if (!clientId) {
+      throw new Error("Missing client id. Open /record?clientId=XYZ (or /record/XYZ).");
+    }
 
-  const user = auth.currentUser;
-  if (!user) {
-    setError("You must be signed in to record a session.");
-    return;
-  }
-  if (!clientId) {
-    setError("Missing client id. Open /record?clientId=XYZ (or /record/XYZ).");
-    return;
-  }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setError("Audio recording is not supported in this browser.");
-    return;
-  }
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-    console.log("Microphone access granted.");   
-
-    mediaStreamRef.current = stream;
-
-    const mimeType = pickBestMimeType();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-
-    chunksRef.current = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-    };
-
-    recorder.onerror = () => {
-      setError("Recording error. Please try again.");
-      stopTracks();
-      setIsRecording(false);
-    };
-
-    recorder.start();
-
-    console.log("Recording started successfully.");   
-
-    mediaRecorderRef.current = recorder;
-    setIsRecording(true);
-
-  } catch (e) {
-    setError(
-      e?.name === "NotAllowedError"
-        ? "Microphone permission was denied."
-        : "Could not access microphone. Please try again."
-    );
-  }
-};
-
-  const endSession = async () => {
-
-  console.log("User ended recording. Processing audio...");
-
-  if (endDisabled) return;
-  setError("");
-
-  const user = auth.currentUser;
-  if (!user) {
-    setError("You must be signed in to upload a recording.");
-    return;
-  }
-
-  setIsUploading(true);
-
-  try {
-    const recorder = mediaRecorderRef.current;
-
-    console.log("Stopping recorder and preparing audio file...");
-
-    // Stop recorder and wait for final data flush
-    const blob = await new Promise((resolve, reject) => {
-      if (!recorder) return reject(new Error("No active recorder."));
-
-      recorder.onstop = () => {
-        try {
-          const type = recorder.mimeType || "audio/webm";
-          resolve(new Blob(chunksRef.current, { type }));
-        } catch (err) {
-          reject(err);
-        }
-      };
-
-      try {
-        recorder.stop();
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    console.log("Audio file created from recording.");
-
-    stopTracks();
-    setIsRecording(false);
-
-    const ext =
-      blob.type.includes("mp4") ? "m4a" : blob.type.includes("webm") ? "webm" : "webm";
-
-    const createdAtMs = Date.now();
-    const storagePath = `users/${user.uid}/clients/${clientId}/sessions/${createdAtMs}.${ext}`;
-    const storageRef = ref(storage, storagePath);
-
-    console.log("Uploading audio to Firebase Storage...");
-
-    // Upload audio
-    await uploadBytes(storageRef, blob, {
-      contentType: blob.type || "audio/webm",
-    });
-
-    console.log("Audio uploaded successfully.");
-
-    const downloadUrl = await getDownloadURL(storageRef);
-
-    console.log("Download URL retrieved.");
-
-    // Create session doc
     const sessionsCol = collection(db, "users", user.uid, "clients", clientId, "sessions");
 
     const docRef = await addDoc(sessionsCol, {
       type: "audio",
-      status: "uploaded",
-      storagePath,
-      downloadUrl,
-      contentType: blob.type || "audio/webm",
+      status: "uploading",
+      storagePath: "",
+      downloadUrl: "",
+      contentType: contentType || "audio/webm",
       createdAt: serverTimestamp(),
-
-      // pipeline status fields (your functions will update these)
       transcriptStatus: "queued",
       summaryStatus: "queued",
     });
 
-    console.log("Session document created. Transcription pipeline should now start.");
+    const ext = getExtensionFromType(contentType);
+    const storagePath = `users/${user.uid}/clients/${clientId}/sessions/${docRef.id}/audio.${ext}`;
+    const storageRef = ref(storage, storagePath);
 
-    // URL-driven state (no localStorage)
-    navigate(`/chatAI?clientId=${clientId}&sessionId=${docRef.id}`);
+    await uploadBytes(storageRef, fileOrBlob, {
+      contentType: contentType || "audio/webm",
+    });
 
-  } catch (e) {
-    console.error("Upload failed.", e);
-    setError("Upload failed. Please try again.");
-    stopTracks();
-    setIsRecording(false);
-  } finally {
-    mediaRecorderRef.current = null;
-    chunksRef.current = [];
-    setIsUploading(false);
-  }
-};
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    await updateDoc(doc(db, "users", user.uid, "clients", clientId, "sessions", docRef.id), {
+      status: "uploaded",
+      storagePath,
+      downloadUrl,
+      updatedAt: serverTimestamp(),
+    });
+
+    return docRef.id;
+  };
+
+  const startRecording = async () => {
+    console.log("User pressed record.");
+
+    if (micDisabled) return;
+    setError("");
+
+    const user = auth.currentUser;
+    if (!user) {
+      setError("You must be signed in to record a session.");
+      return;
+    }
+    if (!clientId) {
+      setError("Missing client id. Open /record?clientId=XYZ (or /record/XYZ).");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Audio recording is not supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      console.log("Microphone access granted.");
+
+      mediaStreamRef.current = stream;
+
+      const mimeType = pickBestMimeType();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onerror = () => {
+        setError("Recording error. Please try again.");
+        stopTracks();
+        setIsRecording(false);
+      };
+
+      recorder.start();
+
+      console.log("Recording started successfully.");
+
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (e) {
+      setError(
+        e?.name === "NotAllowedError"
+          ? "Microphone permission was denied."
+          : "Could not access microphone. Please try again."
+      );
+    }
+  };
+
+  const endSession = async () => {
+    console.log("User ended recording. Processing audio...");
+
+    if (endDisabled) return;
+    setError("");
+
+    const user = auth.currentUser;
+    if (!user) {
+      setError("You must be signed in to upload a recording.");
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      const recorder = mediaRecorderRef.current;
+
+      console.log("Stopping recorder and preparing audio file...");
+
+      const blob = await new Promise((resolve, reject) => {
+        if (!recorder) return reject(new Error("No active recorder."));
+
+        recorder.onstop = () => {
+          try {
+            const type = recorder.mimeType || "audio/webm";
+            resolve(new Blob(chunksRef.current, { type }));
+          } catch (err) {
+            reject(err);
+          }
+        };
+
+        try {
+          recorder.stop();
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      console.log("Audio file created from recording.");
+
+      stopTracks();
+      setIsRecording(false);
+
+      const sessionId = await createQueuedSessionAndUpload({
+        fileOrBlob: blob,
+        contentType: blob.type || "audio/webm",
+      });
+
+      console.log("Session document created and audio uploaded. Transcription pipeline should now start.");
+
+      navigate(`/chatAI?clientId=${clientId}&sessionId=${sessionId}`);
+    } catch (e) {
+      console.error("Upload failed.", e);
+      setError("Upload failed. Please try again.");
+      stopTracks();
+      setIsRecording(false);
+    } finally {
+      mediaRecorderRef.current = null;
+      chunksRef.current = [];
+      setIsUploading(false);
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+
+    if (!file) return;
+    if (uploadTestDisabled) return;
+
+    setError("");
+    setIsUploading(true);
+
+    try {
+      console.log("Test file selected for upload:", file.name);
+
+      const sessionId = await createQueuedSessionAndUpload({
+        fileOrBlob: file,
+        contentType: file.type || "audio/webm",
+      });
+
+      console.log("Test file uploaded successfully.");
+
+      navigate(`/chatAI?clientId=${clientId}&sessionId=${sessionId}`);
+    } catch (err) {
+      console.error("Test upload failed.", err);
+      setError("Test upload failed. Please try again.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   return (
     <div style={styles.page}>
       <div style={styles.card}>
+        <div style={styles.topBar}>
+          <button type="button" style={styles.backButton} onClick={goBackToClientProfile}>
+            ← Back
+          </button>
+        </div>
+
         {isRecording && (
           <div style={styles.recordingRow}>
             <img
@@ -230,7 +298,6 @@ export default function RecordSessionPage() {
             />
             <span style={styles.recordingText}>Recording...</span>
 
-            {/* local keyframes (no CSS file needed) */}
             <style>{`
               @keyframes pulseRec {
                 0%   { transform: scale(1); opacity: 0.75; }
@@ -282,6 +349,23 @@ export default function RecordSessionPage() {
         <button type="button" style={endButtonStyle} disabled={endDisabled} onClick={endSession}>
           {isUploading ? "Uploading…" : "End Session"}
         </button>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="audio/*,video/*"
+          style={{ display: "none" }}
+          onChange={handleFileUpload}
+        />
+
+        <button
+          type="button"
+          style={testUploadLinkStyle}
+          disabled={uploadTestDisabled}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          Upload existing audio instead
+        </button>
       </div>
     </div>
   );
@@ -303,7 +387,7 @@ const styles = {
     maxWidth: "420px",
     background: "#ffffff",
     borderRadius: "18px",
-    padding: "28px 24px 24px",
+    padding: "20px 24px 24px",
     boxShadow: "0 20px 40px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05)",
     display: "flex",
     flexDirection: "column",
@@ -311,9 +395,38 @@ const styles = {
     gap: "22px",
   },
 
-  recordingRow: { display: "flex", alignItems: "center", gap: "8px" },
-  recordingIcon: { width: "18px", height: "18px" },
-  recordingText: { color: "#e11d2e", fontWeight: 700, fontSize: "14px" },
+  topBar: {
+    width: "100%",
+    display: "flex",
+    justifyContent: "flex-start",
+  },
+
+  backButton: {
+    border: "none",
+    background: "transparent",
+    color: "#6B7280",
+    fontSize: "14px",
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: 0,
+  },
+
+  recordingRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
+
+  recordingIcon: {
+    width: "18px",
+    height: "18px",
+  },
+
+  recordingText: {
+    color: "#e11d2e",
+    fontWeight: 700,
+    fontSize: "14px",
+  },
 
   centerArea: {
     display: "flex",
@@ -335,11 +448,16 @@ const styles = {
     boxShadow: "0 12px 24px rgba(0,0,0,0.18)",
     transition: "all 120ms ease",
   },
-  micButtonActive: { background: "#1E40AF" },
+
+  micButtonActive: {
+    background: "#1E40AF",
+  },
+
   micButtonPressed: {
     transform: "translateY(2px) scale(0.985)",
     boxShadow: "inset 0 8px 14px rgba(0,0,0,0.25)",
   },
+
   micButtonDisabled: {
     opacity: 0.65,
     cursor: "default",
@@ -381,16 +499,36 @@ const styles = {
     fontWeight: 800,
     transition: "all 120ms ease",
   },
+
   endButtonEnabled: {
     background: "#ef4444",
     color: "#ffffff",
     cursor: "pointer",
     boxShadow: "0 8px 18px rgba(239,68,68,0.3)",
   },
+
   endButtonDisabled: {
     background: "#E5E7EB",
     color: "#9CA3AF",
     cursor: "not-allowed",
     boxShadow: "none",
+  },
+
+  testUploadLink: {
+    marginTop: "-8px",
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    color: "#9CA3AF",
+    fontSize: "12px",
+    lineHeight: 1.2,
+    textDecoration: "underline",
+    cursor: "pointer",
+  },
+
+  testUploadLinkDisabled: {
+    opacity: 0.5,
+    cursor: "not-allowed",
+    textDecoration: "none",
   },
 };

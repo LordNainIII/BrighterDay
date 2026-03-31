@@ -122,7 +122,7 @@ export default function TranscriptPage() {
         const data = snap.data() || {};
 
         // correct field names (your functions write Transcript)
-        setRawTranscript(data.Transcript || "");
+        setRawTranscript(data.transcript || "");
         setSummaryText(data.summaryText || "");
 
         setTranscriptStatus(data.transcriptStatus || "");
