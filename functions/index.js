@@ -17,19 +17,20 @@ const execFileAsync = promisify(execFile);
 
 admin.initializeApp();
 
-// Secrets (must exist in Secret Manager)
+// SECRETS USED BY OPENAI CALLS
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const OPENAI_VECTOR_STORE_ID = defineSecret("OPENAI_VECTOR_STORE_ID");
 
-const MAX_TRANSCRIPTION_FILE_BYTES = 24 * 1024 * 1024; // keep below 25MB API limit
-const CHUNK_SECONDS = 10 * 60; // 10 minutes
+// AUDIO PROCESSING LIMITS AND TRUNCATION LIMITS
+const MAX_TRANSCRIPTION_FILE_BYTES = 25165824; 
+const CHUNK_SECONDS = 600;
 const SUMMARY_TRANSCRIPT_CHAR_LIMIT = 120000;
 const CHAT_TRANSCRIPT_CHAR_LIMIT = 120000;
 
+// EXTRACTS UID AND CLIENT ID FROM A STORAGE PATH IF IT MATCHES THE EXPECTED SESSION STRUCTURE
 function parseSessionPath(objectName) {
   const parts = objectName.split("/");
 
-  // minimum: users uid clients clientId sessions sessionId ...
   if (parts.length < 6) return null;
   if (parts[0] !== "users") return null;
   if (parts[2] !== "clients") return null;
@@ -41,24 +42,29 @@ function parseSessionPath(objectName) {
   };
 }
 
+// CHECKS WHETHER A VALUE IS A NON-EMPTY STRING
 function hasText(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
+// CREATES A DIRECTORY IF IT DOES NOT ALREADY EXIST
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
 }
 
+// RETURNS FILE SIZE IN BYTES
 function fileSizeBytes(filePath) {
   return fs.statSync(filePath).size;
 }
 
+// SANITISES A FILENAME STEM FOR TEMP FILE USE
 function safeFileStem(name) {
   return String(name || "file").replace(/[^\w.-]/g, "_");
 }
 
+// RUNS FFMPEG WITH THE GIVEN ARGUMENTS
 async function runFfmpeg(args) {
   if (!ffmpegPath) {
     throw new Error("ffmpeg-static not found. Install it with: npm install ffmpeg-static");
@@ -67,6 +73,7 @@ async function runFfmpeg(args) {
   await execFileAsync(ffmpegPath, args);
 }
 
+// CONVERTS INPUT AUDIO INTO A SMALLER SPEECH-FRIENDLY MP3 FORMAT
 async function compressForSpeech(inputPath, outputPath) {
   await runFfmpeg([
     "-y",
@@ -85,6 +92,7 @@ async function compressForSpeech(inputPath, outputPath) {
   ]);
 }
 
+// SPLITS A LARGE AUDIO FILE INTO FIXED-LENGTH CHUNKS
 async function splitAudioIntoChunks(inputPath, outputPattern) {
   await runFfmpeg([
     "-y",
@@ -108,6 +116,7 @@ async function splitAudioIntoChunks(inputPath, outputPattern) {
   ]);
 }
 
+// FINDS ALL CHUNK FILES MATCHING A PREFIX AND SUFFIX, THEN RETURNS THEM SORTED
 async function listFilesMatching(dirPath, prefix, suffix) {
   const names = await fsp.readdir(dirPath);
   return names
@@ -116,6 +125,7 @@ async function listFilesMatching(dirPath, prefix, suffix) {
     .map((name) => path.join(dirPath, name));
 }
 
+// SHORTENS LONG TEXT WHILE KEEPING THE START AND END
 function truncateWithHeadTail(text, limit, marker) {
   if (!hasText(text)) return "";
   if (text.length <= limit) return text;
@@ -132,6 +142,7 @@ function truncateWithHeadTail(text, limit, marker) {
   ].join("\n");
 }
 
+// APPLIES SUMMARY-SPECIFIC TRUNCATION TO THE TRANSCRIPT
 function maybeTruncateForSummary(text) {
   return truncateWithHeadTail(
     text,
@@ -140,6 +151,7 @@ function maybeTruncateForSummary(text) {
   );
 }
 
+// APPLIES CHAT-SPECIFIC TRUNCATION TO THE TRANSCRIPT
 function maybeTruncateForChat(text) {
   return truncateWithHeadTail(
     text,
@@ -148,6 +160,7 @@ function maybeTruncateForChat(text) {
   );
 }
 
+// SENDS ONE AUDIO FILE TO OPENAI WHISPER FOR TRANSCRIPTION
 async function transcribeSingleFile({ openai, filePath }) {
   const transcription = await openai.audio.transcriptions.create({
     file: fs.createReadStream(filePath),
@@ -157,6 +170,7 @@ async function transcribeSingleFile({ openai, filePath }) {
   return (transcription?.text || "").trim();
 }
 
+// HANDLES TRANSCRIPTION ROBUSTLY BY COMPRESSING FIRST, THEN CHUNKING IF STILL TOO LARGE
 async function transcribeAudioRobust({ openai, sourcePath }) {
   const workingDir = path.join(os.tmpdir(), `audio-work-${Date.now()}`);
   ensureDir(workingDir);
@@ -168,6 +182,7 @@ async function transcribeAudioRobust({ openai, sourcePath }) {
   const compressedSize = fileSizeBytes(compressedPath);
   console.log(`Compressed audio size: ${compressedSize} bytes`);
 
+  // USE A SINGLE WHISPER CALL IF THE FILE IS SMALL ENOUGH
   if (compressedSize <= MAX_TRANSCRIPTION_FILE_BYTES) {
     const text = await transcribeSingleFile({
       openai,
@@ -193,6 +208,7 @@ async function transcribeAudioRobust({ openai, sourcePath }) {
 
   const parts = [];
 
+  // TRANSCRIBE EACH CHUNK IN ORDER AND REBUILD THE FULL TRANSCRIPT
   for (let i = 0; i < chunkPaths.length; i += 1) {
     const chunkPath = chunkPaths[i];
     const size = fileSizeBytes(chunkPath);
@@ -226,7 +242,7 @@ async function transcribeAudioRobust({ openai, sourcePath }) {
   };
 }
 
-/* Generate an AI summary using Responses + file_search against your Vector Store. */
+// GENERATES A CLINICAL-STYLE SUMMARY USING THE TRANSCRIPT PLUS MERCK FILE SEARCH 
 async function generateSummary({ openai, transcript, vectorStoreId }) {
   const systemPrompt = [
     "You are assisting a qualified therapist who is reviewing a transcript of a therapy session for reflection and formulation rather than diagnosis.",
@@ -267,6 +283,7 @@ async function generateSummary({ openai, transcript, vectorStoreId }) {
   return out;
 }
 
+// SAVES CHUNKED TRANSCRIPT PARTS INTO A SUBCOLLECTION FOR LATER INSPECTION
 async function saveTranscriptParts({ sessionRef, parts }) {
   if (!Array.isArray(parts) || !parts.length) return;
 
@@ -285,7 +302,7 @@ async function saveTranscriptParts({ sessionRef, parts }) {
   await batch.commit();
 }
 
-/* Create the “first assistant message” (the summary) only if the messages collection is empty. */
+// WRITES THE SUMMARY INTO CHAT ONLY IF NO MESSAGES EXIST YET 
 async function ensureSummaryAsFirstChatMessage({ sessionRef, summaryText }) {
   const messagesCol = sessionRef.collection("messages");
   const existing = await messagesCol.limit(1).get();
@@ -299,7 +316,7 @@ async function ensureSummaryAsFirstChatMessage({ sessionRef, summaryText }) {
   });
 }
 
-/* Storage-trigger: when audio is uploaded, transcribe and then summarise */
+// STORAGE TRIGGER: WHEN AUDIO IS UPLOADED, TRANSCRIBE IT AND THEN GENERATE A SUMMARY
 exports.transcribeSessionAudio = onObjectFinalized(
   {
     region: "europe-west2",
@@ -317,6 +334,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
     if (!objectName) return;
 
+    // IGNORE NON-AUDIO AND NON-VIDEO UPLOADS
     if (!contentType.startsWith("audio/") && !contentType.startsWith("video/")) {
       console.log("Uploaded file is not audio/video. Ignoring.");
       return;
@@ -339,7 +357,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
       .doc(clientId)
       .collection("sessions");
 
-    // Find session doc by storagePath
+    // FIND THE SESSION DOC THAT MATCHES THIS STORAGE FILE
     const snap = await sessionsCol.where("storagePath", "==", objectName).limit(1).get();
 
     if (snap.empty) {
@@ -351,6 +369,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
     console.log("Session document located. Beginning transcription.");
 
+    // MARK TRANSCRIPT WORK AS STARTED
     await sessionRef.update({
       transcriptStatus: "processing",
       summaryStatus: "pending",
@@ -376,7 +395,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
       console.log("Audio file downloaded. Preparing for robust transcription.");
 
-      // ---- 1) Transcribe (compress + chunk if needed) ----
+      // STEP 1: TRANSCRIBE THE AUDIO, CHUNKING IF NEEDED
       const transcriptionResult = await transcribeAudioRobust({
         openai,
         sourcePath: tmpFile,
@@ -411,7 +430,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
       console.log("Transcript saved to Firestore.");
 
-      // ---- 2) Summarise ----
+      // STEP 2: GENERATE THE AI SUMMARY USING THE FINALISED TRANSCRIPT
       const vectorStoreId = OPENAI_VECTOR_STORE_ID.value();
       if (!hasText(vectorStoreId)) {
         throw new Error("Missing OPENAI_VECTOR_STORE_ID secret value.");
@@ -447,6 +466,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
       const clientRef = db.collection("users").doc(uid).collection("clients").doc(clientId);
 
+      // ALSO MIRROR THE LATEST SUMMARY ON THE CLIENT DOCUMENT
       await clientRef.set(
         {
           summary: summaryText,
@@ -461,6 +481,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
 
       console.error("Transcription pipeline failed.", msg);
 
+      // MARK BOTH TRANSCRIPT AND SUMMARY AS FAILED IF ANY PART OF THE PIPELINE BREAKS
       try {
         await sessionRef.update({
           transcriptStatus: "error",
@@ -471,6 +492,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
         });
       } catch {}
     } finally {
+      // CLEAN UP THE TEMP FILE REGARDLESS OF SUCCESS OR FAILURE
       try {
         fs.unlinkSync(tmpFile);
       } catch {}
@@ -480,6 +502,7 @@ exports.transcribeSessionAudio = onObjectFinalized(
   }
 );
 
+// CALLABLE FUNCTION TO DELETE ALL USER DATA ACROSS FIRESTORE, STORAGE, AND AUTH
 exports.deleteAccountAndData = onCall(
   {
     region: "europe-west2",
@@ -498,7 +521,7 @@ exports.deleteAccountAndData = onCall(
 
     console.log("Starting deletion for user.");
 
-    // 1) Delete Firestore: users/{uid} and all nested subcollections
+    // 1) DELETE FIRESTORE DATA INCLUDING NESTED SUBCOLLECTIONS
     const userDocRef = db.collection("users").doc(uid);
 
     try {
@@ -511,7 +534,7 @@ exports.deleteAccountAndData = onCall(
       throw new HttpsError("internal", "Failed to delete Firestore user data.");
     }
 
-    // 2) Delete Storage files under users/{uid}/...
+    // 2) DELETE ALL STORAGE FILES UNDER THE USER PREFIX
     try {
       console.log("Deleting Storage files...");
       const [files] = await bucket.getFiles({ prefix: `users/${uid}/` });
@@ -522,7 +545,7 @@ exports.deleteAccountAndData = onCall(
       console.error(e);
     }
 
-    // 3) Delete Auth user
+    // 3) DELETE THE FIREBASE AUTH USER
     try {
       console.log("Deleting Auth user...");
       await admin.auth().deleteUser(uid);
@@ -538,8 +561,9 @@ exports.deleteAccountAndData = onCall(
   }
 );
 
-// -------------------- Chat (callable) --------------------
+// -------------------- CHAT (CALLABLE) --------------------
 
+// BUILDS THE SYSTEM PROMPT USED FOR SESSION CHAT RESPONSES
 function chatSystemPrompt() {
   return [
     "You are assisting a qualified therapist.",
@@ -559,6 +583,7 @@ function chatSystemPrompt() {
   ].join("\n");
 }
 
+// GENERATES A CHAT ANSWER USING THE SESSION SUMMARY, TRANSCRIPT, AND MERCK FILE SEARCH
 async function generateAnswer({ openai, transcript, summaryText, question, vectorStoreId }) {
   const context = [
     "SESSION SUMMARY:",
@@ -588,6 +613,7 @@ async function generateAnswer({ openai, transcript, summaryText, question, vecto
   return out;
 }
 
+// CALLABLE FUNCTION FOR IN-APP CHAT ABOUT A SPECIFIC SESSION
 exports.chatWithMerck = onCall(
   {
     region: "europe-west2",
@@ -647,7 +673,7 @@ exports.chatWithMerck = onCall(
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY.value() });
 
-    // Write user message first
+    // SAVE THE USER MESSAGE FIRST SO THE CONVERSATION HISTORY IS PERSISTED
     const messagesCol = sessionRef.collection("messages");
     await messagesCol.add({
       role: "user",

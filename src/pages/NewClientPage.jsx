@@ -4,6 +4,7 @@ import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import BurgerMenu from "../components/BurgerMenu";
 
+// NEW CLIENT PAGE
 export default function NewClientPage() {
   const navigate = useNavigate();
 
@@ -15,6 +16,7 @@ export default function NewClientPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // BUILDS HELPER TEXT FOR THE EMAIL FIELD
   const emailHint = useMemo(() => {
     const v = clientEmail.trim();
     if (!v) return "Optional — useful for sending summaries or follow-ups.";
@@ -22,6 +24,7 @@ export default function NewClientPage() {
     return "";
   }, [clientEmail]);
 
+  // BUILDS HELPER TEXT FOR THE PHONE FIELD
   const phoneHint = useMemo(() => {
     const v = clientPhone.trim();
     if (!v) return "Optional — useful for appointment reminders.";
@@ -29,6 +32,7 @@ export default function NewClientPage() {
     return "";
   }, [clientPhone]);
 
+  // VALIDATES THE CLIENT FORM BEFORE SUBMISSION
   const validate = () => {
     if (!firstName.trim()) return "Please enter a first name.";
     if (!lastName.trim()) return "Please enter a last name.";
@@ -42,6 +46,7 @@ export default function NewClientPage() {
     return "";
   };
 
+  // CREATES A NEW CLIENT DOCUMENT IN FIRESTORE
   const handleCreateClient = async () => {
     console.log("Create client requested.");
 
@@ -81,7 +86,6 @@ export default function NewClientPage() {
       console.log("Client ID:", docRef.id);
 
       navigate("/clientlist", { state: { createdClientId: docRef.id } });
-
     } catch (e) {
       console.log("Create client failed.");
       setError("Could not create client. Please try again.");

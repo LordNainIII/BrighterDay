@@ -13,6 +13,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../firebase";
 import BurgerMenu from "../components/BurgerMenu";
 
+// SETTINGS PAGE
 export default function SettingsPage() {
   const navigate = useNavigate();
 
@@ -30,6 +31,7 @@ export default function SettingsPage() {
 
   const [error, setError] = useState("");
 
+  // CHECK AUTH STATE AND REDIRECT IF THE USER IS NOT SIGNED IN
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid || null);
@@ -45,6 +47,7 @@ export default function SettingsPage() {
     return () => unsub();
   }, [navigate]);
 
+  // LOGS THE USER OUT AND RETURNS TO THE HOME PAGE
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -55,6 +58,7 @@ export default function SettingsPage() {
     }
   };
 
+  // SAVES THE UPDATED DISPLAY NAME TO FIREBASE AUTH AND FIRESTORE
   const handleSaveName = async () => {
     const user = auth.currentUser;
     if (!user || !displayName.trim()) return;
@@ -63,10 +67,10 @@ export default function SettingsPage() {
     setError("");
 
     try {
-      // Update Firebase Auth profile
+      // UPDATE THE FIREBASE AUTH PROFILE
       await updateProfile(user, { displayName });
 
-      // Optional: mirror to Firestore user doc
+      // MIRROR THE DISPLAY NAME TO THE FIRESTORE USER DOCUMENT
       await updateDoc(doc(db, "users", user.uid), {
         displayName,
       });
@@ -78,6 +82,7 @@ export default function SettingsPage() {
     }
   };
 
+  // RE-AUTHENTICATES THE USER, CALLS THE DELETE FUNCTION, AND REMOVES THE ACCOUNT
   const handleDeleteAccount = async () => {
     const user = auth.currentUser;
     if (!user) return;
@@ -97,23 +102,21 @@ export default function SettingsPage() {
     setDeleting(true);
 
     try {
-      // 1️⃣ Re-authenticate
-      const cred = EmailAuthProvider.credential(
-        user.email,
-        deletePassword
-      );
+      // RE-AUTHENTICATE BEFORE ACCOUNT DELETION
+      const cred = EmailAuthProvider.credential(user.email, deletePassword);
 
       await reauthenticateWithCredential(user, cred);
 
-      // 2️⃣ Call Cloud Function
+      // CALL THE CLOUD FUNCTION THAT DELETES USER DATA
       const fn = httpsCallable(functions, "deleteAccountAndData");
       await fn();
 
-      // 3️⃣ Redirect
+      // REDIRECT ON SUCCESS
       navigate("/", { replace: true });
     } catch (err) {
       console.error(err);
 
+      // MAP COMMON DELETE FAILURES TO CLEAR USER-FRIENDLY MESSAGES
       if (err.code?.includes("wrong-password")) {
         setDeleteErr("Incorrect password.");
       } else if (err.code?.includes("requires-recent-login")) {
@@ -128,6 +131,7 @@ export default function SettingsPage() {
     }
   };
 
+  // WAIT UNTIL AUTH STATE HAS BEEN RESOLVED
   if (!authReady) return null;
 
   return (
@@ -140,7 +144,7 @@ export default function SettingsPage() {
 
           {error ? <div style={styles.errorBox}>{error}</div> : null}
 
-          {/* Change name */}
+          {/* DISPLAY NAME SECTION */}
           <div style={styles.section}>
             <div style={styles.label}>Display name</div>
             <div style={styles.row}>
@@ -159,14 +163,14 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Logout */}
+          {/* LOG OUT SECTION */}
           <div style={styles.section}>
             <button style={styles.logoutButton} onClick={handleLogout}>
               Log out
             </button>
           </div>
 
-          {/* Delete account */}
+          {/* DELETE ACCOUNT SECTION */}
           <div style={styles.section}>
             <button
               style={styles.deleteButton}

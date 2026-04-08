@@ -6,6 +6,7 @@ import BurgerMenu from "../components/BurgerMenu";
 
 import { auth, db } from "../firebase";
 
+// TRANSCRIPT PAGE FOR A SINGLE SESSION
 export default function TranscriptPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -20,11 +21,10 @@ export default function TranscriptPage() {
   const [error, setError] = useState("");
 
   const [rawTranscript, setRawTranscript] = useState("");
-  const [summaryText, setSummaryText] = useState("");
 
-  const [transcriptStatus, setTranscriptStatus] = useState(""); // queued | processing | done | error
-  const [summaryStatus, setSummaryStatus] = useState(""); // queued | processing | done | error
+  const [transcriptStatus, setTranscriptStatus] = useState("");
 
+  // CHECK AUTH STATE AND REDIRECT TO HOME IF THE USER IS NOT LOGGED IN
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid || null);
@@ -34,14 +34,13 @@ export default function TranscriptPage() {
     return () => unsub();
   }, [navigate]);
 
+  // BUILDS A SMALL STATUS LINE FOR THE HEADER
   const statusLine = useMemo(() => {
     if (!clientId || !sessionId) return "Missing client/session in URL.";
-    const t = transcriptStatus ? `Transcript: ${transcriptStatus}` : "Transcript: —";
-    const s = summaryStatus ? `Summary: ${summaryStatus}` : "Summary: —";
-    return `${t} · ${s}`;
-  }, [clientId, sessionId, transcriptStatus, summaryStatus]);
+    return transcriptStatus ? `Transcript: ${transcriptStatus}` : "Transcript: —";
+  }, [clientId, sessionId, transcriptStatus]);
 
-  // Formatting (unchanged idea, just uses rawTranscript)
+  // FORMATS THE RAW TRANSCRIPT INTO READABLE BLOCKS
   const formattedBlocks = useMemo(() => {
     const t = (rawTranscript || "").trim();
     if (!t) return [];
@@ -49,6 +48,7 @@ export default function TranscriptPage() {
     const hasSpeakerLabels =
       /(^|\n)\s*(therapist|client|counsellor|counselor)\s*:/i.test(t);
 
+    // SPLIT BY SPEAKER LABELS IF THEY EXIST
     if (hasSpeakerLabels) {
       const parts = t
         .replace(/\r\n/g, "\n")
@@ -66,6 +66,7 @@ export default function TranscriptPage() {
 
     const normalised = t.replace(/\r\n/g, "\n");
 
+    // SPLIT INTO PARAGRAPHS IF DOUBLE LINE BREAKS EXIST
     const paras = normalised
       .split(/\n{2,}/g)
       .map((p) => p.trim())
@@ -75,6 +76,7 @@ export default function TranscriptPage() {
       return paras.map((text, idx) => ({ key: `p-${idx}`, speaker: "", text }));
     }
 
+    // OTHERWISE GROUP SENTENCES INTO SMALLER READING CHUNKS
     const sentences = normalised
       .replace(/\s+/g, " ")
       .split(/(?<=[.!?])\s+/)
@@ -95,7 +97,7 @@ export default function TranscriptPage() {
     return blocks.map((text, idx) => ({ key: `c-${idx}`, speaker: "", text }));
   }, [rawTranscript]);
 
-  // Live subscribe to the session doc
+  // LIVE SUBSCRIBE TO THE SESSION DOCUMENT IN FIRESTORE
   useEffect(() => {
     if (!authReady || !uid) return;
 
@@ -121,12 +123,9 @@ export default function TranscriptPage() {
 
         const data = snap.data() || {};
 
-        // correct field names (your functions write Transcript)
+        // LOAD THE TRANSCRIPT AND ITS STATUS FROM THE SESSION DOC
         setRawTranscript(data.transcript || "");
-        setSummaryText(data.summaryText || "");
-
         setTranscriptStatus(data.transcriptStatus || "");
-        setSummaryStatus(data.summaryStatus || "");
 
         setLoading(false);
       },
@@ -176,26 +175,6 @@ export default function TranscriptPage() {
           </div>
 
           {error ? <div style={styles.errorBox}>{error}</div> : null}
-
-          {summaryText ? (
-            <div style={styles.summaryBox}>
-              <div style={styles.summaryTitle}>AI summary</div>
-              <div style={styles.summaryText}>{summaryText}</div>
-            </div>
-          ) : (
-            <div style={styles.summaryPendingBox}>
-              <div style={styles.summaryTitle}>AI summary</div>
-              <div style={styles.summaryPendingText}>
-                {summaryStatus === "processing"
-                  ? "Summarising…"
-                  : summaryStatus === "error"
-                  ? "Summary failed. Check function logs."
-                  : rawTranscript.trim()
-                  ? "Queued. This will appear once summarisation completes."
-                  : "Waiting for transcript…"}
-              </div>
-            </div>
-          )}
 
           <div style={styles.transcriptWindow}>
             {loading ? (
@@ -326,38 +305,6 @@ const styles = {
     color: "#9f1239",
     fontSize: "13px",
     lineHeight: "1.35",
-  },
-
-  summaryBox: {
-    border: "1px solid #e5e7eb",
-    background: "#fafafa",
-    borderRadius: "12px",
-    padding: "14px",
-    marginBottom: "12px",
-  },
-  summaryPendingBox: {
-    border: "1px dashed #d1d5db",
-    background: "#fafafa",
-    borderRadius: "12px",
-    padding: "14px",
-    marginBottom: "12px",
-  },
-  summaryTitle: {
-    fontSize: "13px",
-    fontWeight: 900,
-    color: "#111827",
-    marginBottom: "6px",
-  },
-  summaryText: {
-    fontSize: "14px",
-    color: "#374151",
-    lineHeight: 1.55,
-    whiteSpace: "pre-wrap",
-  },
-  summaryPendingText: {
-    fontSize: "13px",
-    color: "#6b7280",
-    lineHeight: 1.45,
   },
 
   transcriptWindow: {

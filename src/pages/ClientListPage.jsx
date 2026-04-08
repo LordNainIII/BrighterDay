@@ -7,6 +7,7 @@ import BurgerMenu from "../components/BurgerMenu";
 import BrighterDay from "../assets/BrighterDay.png";
 import { auth, db } from "../firebase";
 
+// CLIENT LIST PAGE
 export default function ClientListPage() {
   const navigate = useNavigate();
 
@@ -16,6 +17,7 @@ export default function ClientListPage() {
   const [uid, setUid] = useState(null);
   const [error, setError] = useState("");
 
+  // CHECK AUTH STATE AND REDIRECT IF THE USER IS NOT SIGNED IN
   useEffect(() => {
     console.log("ClientList page opened.");
 
@@ -34,6 +36,7 @@ export default function ClientListPage() {
     return () => unsub();
   }, [navigate]);
 
+  // LIVE SUBSCRIBE TO THE USER'S CLIENT LIST IN FIRESTORE
   useEffect(() => {
     if (!authReady || !uid) return;
 
@@ -64,6 +67,7 @@ export default function ClientListPage() {
     };
   }, [authReady, uid]);
 
+  // FILTER CLIENTS BY NAME, EMAIL, OR PHONE
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return clients;
@@ -76,12 +80,14 @@ export default function ClientListPage() {
     });
   }, [clients, query]);
 
+  // BUILDS INITIALS FOR THE CLIENT AVATAR
   const initials = (firstName, lastName) => {
     const a = (firstName || "").trim()[0] || "";
     const b = (lastName || "").trim()[0] || "";
     return (a + b).toUpperCase();
   };
 
+  // OPENS THE SELECTED CLIENT PROFILE PAGE
   const openClient = (clientId) => {
     console.log("Opening client profile:", clientId);
     navigate(`/clientprofile/${clientId}`);

@@ -4,6 +4,7 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 
+// REGISTRATION PAGE
 export default function RegistrationPage() {
   const navigate = useNavigate();
 
@@ -15,6 +16,7 @@ export default function RegistrationPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // VALIDATES THE REGISTRATION FORM BEFORE SUBMISSION
   const validate = () => {
     if (!name.trim()) return "Please enter your name.";
     if (!email.trim()) return "Please enter your email address.";
@@ -24,59 +26,57 @@ export default function RegistrationPage() {
     return "";
   };
 
+  // CREATES THE FIREBASE AUTH USER AND MATCHING FIRESTORE USER DOCUMENT
   const handleRegister = async () => {
+    console.log("User attempting to register.");
 
-  console.log("User attempting to register.");
-
-  const msg = validate();
-  if (msg) {
-    setError(msg);
-    console.log("Registration blocked by validation.");
-    return;
-  }
-
-  setError("");
-  setLoading(true);
-
-  try {
-    const cleanEmail = email.trim().toLowerCase();
-
-    console.log("Creating Firebase Auth user...");
-
-    const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-
-    console.log("Firebase Auth user created.");
-
-    await setDoc(doc(db, "users", cred.user.uid), {
-      name: name.trim(),
-      email: cleanEmail,
-      createdAt: serverTimestamp(),
-    });
-
-    console.log("User document created in Firestore.");
-
-    navigate("/newclient");
-
-  } catch (e) {
-
-    console.log("Registration failed.");
-
-    const code = e?.code || "";
-
-    if (code === "auth/email-already-in-use") {
-      setError("That email is already in use.");
-    } else if (code === "auth/invalid-email") {
-      setError("Please enter a valid email address.");
-    } else if (code === "auth/weak-password") {
-      setError("Password is too weak. Use at least 8 characters.");
-    } else {
-      setError("Registration failed. Please try again.");
+    const msg = validate();
+    if (msg) {
+      setError(msg);
+      console.log("Registration blocked by validation.");
+      return;
     }
 
-  } finally {
-    setLoading(false);
-  }
-};
+    setError("");
+    setLoading(true);
+
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+
+      console.log("Creating Firebase Auth user...");
+
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+
+      console.log("Firebase Auth user created.");
+
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name: name.trim(),
+        email: cleanEmail,
+        createdAt: serverTimestamp(),
+      });
+
+      console.log("User document created in Firestore.");
+
+      navigate("/newclient");
+    } catch (e) {
+      console.log("Registration failed.");
+
+      const code = e?.code || "";
+
+      // MAP FIREBASE AUTH ERRORS TO CLEAR USER-FRIENDLY MESSAGES
+      if (code === "auth/email-already-in-use") {
+        setError("That email is already in use.");
+      } else if (code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+      } else if (code === "auth/weak-password") {
+        setError("Password is too weak. Use at least 8 characters.");
+      } else {
+        setError("Registration failed. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div style={styles.page}>

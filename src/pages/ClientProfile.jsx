@@ -6,6 +6,7 @@ import BurgerMenu from "../components/BurgerMenu";
 
 import { auth, db } from "../firebase";
 
+// CLIENT PROFILE PAGE
 export default function ClientProfilePage() {
   const navigate = useNavigate();
   const { clientId } = useParams();
@@ -21,6 +22,7 @@ export default function ClientProfilePage() {
 
   const [error, setError] = useState("");
 
+  // CHECK AUTH STATE AND REDIRECT IF THE USER IS NOT SIGNED IN
   useEffect(() => {
     console.log("ClientProfile page opened.");
 
@@ -39,7 +41,7 @@ export default function ClientProfilePage() {
     return () => unsub();
   }, [navigate]);
 
-  // Load client doc
+  // LOAD THE CLIENT DOCUMENT ONCE
   useEffect(() => {
     if (!authReady || !uid) return;
 
@@ -79,7 +81,7 @@ export default function ClientProfilePage() {
     })();
   }, [authReady, uid, clientId]);
 
-  // Subscribe to sessions
+  // LIVE SUBSCRIBE TO THIS CLIENT'S SESSIONS
   useEffect(() => {
     if (!authReady || !uid || !clientId) return;
 
@@ -96,7 +98,7 @@ export default function ClientProfilePage() {
 
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-        // newest first
+        // SORT SESSIONS SO THE NEWEST APPEAR FIRST
         rows.sort((a, b) => {
           const aTs = a?.createdAt?.seconds ? a.createdAt.seconds : null;
           const bTs = b?.createdAt?.seconds ? b.createdAt.seconds : null;
@@ -120,6 +122,7 @@ export default function ClientProfilePage() {
     };
   }, [authReady, uid, clientId]);
 
+  // BUILDS INITIALS FOR THE CLIENT AVATAR
   const initials = (firstName, lastName) => {
     const a = (firstName || "").trim()[0] || "";
     const b = (lastName || "").trim()[0] || "";
@@ -130,8 +133,10 @@ export default function ClientProfilePage() {
     ? `${(client.firstName || "").trim()} ${(client.lastName || "").trim()}`
     : "";
 
+  // CHECKS WHETHER A VALUE IS A NON-EMPTY STRING
   const hasText = (v) => typeof v === "string" && v.trim().length > 0;
 
+  // FORMATS SESSION DATES FROM FIRESTORE TIMESTAMPS OR STRINGS
   const formatMaybeTimestamp = (value) => {
     if (!value) return "Session";
 
@@ -158,17 +163,19 @@ export default function ClientProfilePage() {
     return "Session";
   };
 
+  // OPENS THE CHAT PAGE FOR THE SELECTED SESSION
   const openSession = (sessionId) => {
     console.log("Opening session chat:", sessionId);
     navigate(`/chatAI?clientId=${clientId}&sessionId=${sessionId}`);
   };
 
+  // OPENS THE RECORD SESSION PAGE FOR THIS CLIENT
   const goRecord = () => {
     console.log("Navigating to record new session.");
     navigate(`/record?clientId=${clientId}`);
   };
 
-  // IMPORTANT: this must match what the Cloud Function writes to the client doc
+  // READS THE CLIENT-LEVEL SUMMARY WRITTEN BY THE CLOUD FUNCTION
   const clientSummary = client?.summary || "";
 
   return (

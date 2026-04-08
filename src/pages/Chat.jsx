@@ -7,6 +7,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../firebase";
 import BurgerMenu from "../components/BurgerMenu";
 
+// CHAT PAGE FOR A SINGLE SESSION
 export default function Chat() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -27,6 +28,7 @@ export default function Chat() {
 
   const sessionLabel = useMemo(() => "Session", []);
 
+  // CHECK AUTH STATE AND REDIRECT IF THE USER IS NOT SIGNED IN
   useEffect(() => {
     console.log("Chat page opened.");
 
@@ -43,12 +45,14 @@ export default function Chat() {
     return () => unsub();
   }, [navigate]);
 
+  // SCROLLS THE MESSAGE LIST TO THE BOTTOM
   const scrollToBottom = () => {
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   };
 
+  // FORMATS FIRESTORE TIMESTAMPS INTO A SIMPLE UK TIME STRING
   const formatTime = (ts) => {
     if (!ts) return "";
     if (typeof ts?.toDate === "function") {
@@ -62,7 +66,7 @@ export default function Chat() {
     return "";
   };
 
-  // Load messages from Firestore
+  // LOADS CHAT MESSAGES LIVE FROM FIRESTORE
   useEffect(() => {
     if (!authReady || !uid) return;
 
@@ -125,7 +129,7 @@ export default function Chat() {
     };
   }, [authReady, uid, clientId, sessionId]);
 
-  // Send -> calls Cloud Function which writes user + assistant messages
+  // SENDS THE USER MESSAGE TO THE CLOUD FUNCTION
   const send = async () => {
     const text = input.trim();
     if (!text || !uid || sending) return;
@@ -160,6 +164,7 @@ export default function Chat() {
     }
   };
 
+  // FALLBACK MESSAGE SHOWN WHEN THERE ARE NO CHAT MESSAGES YET
   const waitingBubble = (
     <div style={{ ...styles.messageRow, ...styles.messageRowAssistant }}>
       <div style={{ ...styles.bubble, ...styles.bubbleAssistant }}>

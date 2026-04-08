@@ -8,6 +8,7 @@ import { auth, db, storage } from "../firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 
+// CHOOSES THE BEST RECORDING MIME TYPE SUPPORTED BY THE BROWSER
 function pickBestMimeType() {
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
   for (const t of candidates) {
@@ -16,6 +17,7 @@ function pickBestMimeType() {
   return "";
 }
 
+// MAPS A MIME TYPE TO A SUITABLE FILE EXTENSION
 function getExtensionFromType(type = "") {
   if (type.includes("mp4") || type.includes("m4a")) return "m4a";
   if (type.includes("mpeg") || type.includes("mp3")) return "mp3";
@@ -25,6 +27,7 @@ function getExtensionFromType(type = "") {
   return "webm";
 }
 
+// RECORD SESSION PAGE
 export default function RecordSessionPage() {
   const navigate = useNavigate();
   const params = useParams();
@@ -46,6 +49,7 @@ export default function RecordSessionPage() {
   const micDisabled = isRecording || isUploading;
   const uploadTestDisabled = isRecording || isUploading;
 
+  // BUILDS THE END SESSION BUTTON STYLE DYNAMICALLY
   const endButtonStyle = useMemo(
     () => ({
       ...styles.endButton,
@@ -54,6 +58,7 @@ export default function RecordSessionPage() {
     [endDisabled]
   );
 
+  // BUILDS THE MICROPHONE BUTTON STYLE DYNAMICALLY
   const micButtonStyle = useMemo(
     () => ({
       ...styles.micButton,
@@ -64,6 +69,7 @@ export default function RecordSessionPage() {
     [isRecording, isMicPressed, micDisabled]
   );
 
+  // BUILDS THE TEST UPLOAD LINK STYLE DYNAMICALLY
   const testUploadLinkStyle = useMemo(
     () => ({
       ...styles.testUploadLink,
@@ -72,6 +78,7 @@ export default function RecordSessionPage() {
     [uploadTestDisabled]
   );
 
+  // STOPS ALL ACTIVE MICROPHONE TRACKS
   const stopTracks = () => {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -79,6 +86,7 @@ export default function RecordSessionPage() {
     }
   };
 
+  // RETURNS TO THE CLIENT PROFILE PAGE
   const goBackToClientProfile = () => {
     if (!clientId) {
       navigate(-1);
@@ -87,6 +95,7 @@ export default function RecordSessionPage() {
     navigate(`/clientprofile/${clientId}`);
   };
 
+  // CREATES A QUEUED SESSION DOCUMENT AND UPLOADS THE AUDIO FILE TO STORAGE
   const createQueuedSessionAndUpload = async ({ fileOrBlob, contentType }) => {
     const user = auth.currentUser;
     if (!user) {
@@ -98,6 +107,7 @@ export default function RecordSessionPage() {
 
     const sessionsCol = collection(db, "users", user.uid, "clients", clientId, "sessions");
 
+    // CREATE THE SESSION DOCUMENT FIRST SO ITS ID CAN BE USED IN THE STORAGE PATH
     const docRef = await addDoc(sessionsCol, {
       type: "audio",
       status: "uploading",
@@ -119,6 +129,7 @@ export default function RecordSessionPage() {
 
     const downloadUrl = await getDownloadURL(storageRef);
 
+    // UPDATE THE SESSION DOCUMENT ONCE THE FILE IS FULLY UPLOADED
     await updateDoc(doc(db, "users", user.uid, "clients", clientId, "sessions", docRef.id), {
       status: "uploaded",
       storagePath,
@@ -129,6 +140,7 @@ export default function RecordSessionPage() {
     return docRef.id;
   };
 
+  // STARTS LIVE MICROPHONE RECORDING
   const startRecording = async () => {
     console.log("User pressed record.");
 
@@ -185,6 +197,7 @@ export default function RecordSessionPage() {
     }
   };
 
+  // STOPS THE RECORDING, CREATES A BLOB, AND UPLOADS IT
   const endSession = async () => {
     console.log("User ended recording. Processing audio...");
 
@@ -204,6 +217,7 @@ export default function RecordSessionPage() {
 
       console.log("Stopping recorder and preparing audio file...");
 
+      // WAIT FOR THE RECORDER TO FINISH SO THE AUDIO BLOB CAN BE BUILT
       const blob = await new Promise((resolve, reject) => {
         if (!recorder) return reject(new Error("No active recorder."));
 
@@ -248,6 +262,7 @@ export default function RecordSessionPage() {
     }
   };
 
+  // HANDLES MANUAL UPLOAD OF AN EXISTING AUDIO OR VIDEO FILE
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -370,6 +385,7 @@ export default function RecordSessionPage() {
     </div>
   );
 }
+
 
 const styles = {
   page: {
