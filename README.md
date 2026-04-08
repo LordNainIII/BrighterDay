@@ -4,7 +4,13 @@
 
 VISIT: https://youtu.be/n9bv2o_Gjhc
 
+------------ GITHUB ---------------
+
+VISIT: https://github.com/LordNainIII/BrighterDay
+
 -----------------------------------
+
+
 
 Brighter Day is an AI-assisted therapist support platform designed to streamline session documentation and reflective clinical review. The system allows therapists to record or upload therapy sessions, automatically transcribe audio, generate AI-assisted summaries, and interact with transcripts through an intelligent chat interface.
 
