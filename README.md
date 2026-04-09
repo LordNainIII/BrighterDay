@@ -159,6 +159,7 @@ Ask questions regarding the session transcript and receive contextual AI respons
 - No collaboration/multi-user support  
 - Large audio files may increase processing time  
 
+
 ## Important User Notes
 
 This project requires Firebase and OpenAI cloud configuration to fully function.
