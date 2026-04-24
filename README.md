@@ -41,7 +41,7 @@ But if you wish to set this up locally - follow these instructions:
 ### 1. Clone Repository
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
+git clone https://github.com/LordNainIII/BrighterDay.git
 cd brighter-day
 ```
 
